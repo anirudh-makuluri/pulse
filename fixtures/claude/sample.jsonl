@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":"Please implement the export CSV button for the reports page"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll add an export CSV button to the reports page."}]}}

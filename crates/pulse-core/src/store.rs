@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::error::{PulseError, Result};
 use crate::models::{
-    Evidence, NewEvidence, NewTask, Task, TaskSource, TaskStatus, TaskUpdate,
+    Evidence, NewEvidence, NewTask, SourceWatermark, Task, TaskSource, TaskStatus, TaskUpdate,
 };
 use crate::state::validate_transition;
 
@@ -286,6 +286,82 @@ impl Store {
             .query_row(params![dedup_key], map_task)
             .optional()?;
         Ok(task)
+    }
+
+    pub fn get_watermark(&self, source_ref: &str) -> Result<Option<SourceWatermark>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT source_ref, path, size_bytes, mtime_ms, byte_offset, last_processed_at
+            FROM source_watermarks WHERE source_ref = ?1
+            "#,
+        )?;
+        let row = stmt
+            .query_row(params![source_ref], |row| {
+                Ok(SourceWatermark {
+                    source_ref: row.get(0)?,
+                    path: row.get(1)?,
+                    size_bytes: row.get(2)?,
+                    mtime_ms: row.get(3)?,
+                    byte_offset: row.get(4)?,
+                    last_processed_at: parse_dt(&row.get::<_, String>(5)?)?,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn upsert_watermark(&self, wm: &SourceWatermark) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO source_watermarks
+              (source_ref, path, size_bytes, mtime_ms, byte_offset, last_processed_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(source_ref) DO UPDATE SET
+              path = excluded.path,
+              size_bytes = excluded.size_bytes,
+              mtime_ms = excluded.mtime_ms,
+              byte_offset = excluded.byte_offset,
+              last_processed_at = excluded.last_processed_at
+            "#,
+            params![
+                wm.source_ref,
+                wm.path,
+                wm.size_bytes,
+                wm.mtime_ms,
+                wm.byte_offset,
+                wm.last_processed_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_activity(
+        &self,
+        source: &str,
+        kind: &str,
+        raw_ref: &str,
+        payload_json: Option<&str>,
+        task_id: Option<Uuid>,
+    ) -> Result<Uuid> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        self.conn.execute(
+            r#"
+            INSERT INTO activity_events
+              (id, source, kind, raw_ref, payload_json, observed_at, task_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                id.to_string(),
+                source,
+                kind,
+                raw_ref,
+                payload_json,
+                now.to_rfc3339(),
+                task_id.map(|t| t.to_string()),
+            ],
+        )?;
+        Ok(id)
     }
 
     /// Resolve a full UUID or unique id prefix to a task.

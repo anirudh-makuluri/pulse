@@ -220,3 +220,13 @@ pub struct CheckIn {
     pub created_at: DateTime<Utc>,
     pub answered_at: Option<DateTime<Utc>>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceWatermark {
+    pub source_ref: String,
+    pub path: String,
+    pub size_bytes: i64,
+    pub mtime_ms: i64,
+    pub byte_offset: i64,
+    pub last_processed_at: DateTime<Utc>,
+}

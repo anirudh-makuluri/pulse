@@ -111,6 +111,22 @@ impl IpcClient {
         call(&mut self.stream, "config.reload", json!({}))?;
         Ok(())
     }
+
+    pub fn sources_list(&mut self) -> Result<Value> {
+        call(&mut self.stream, "sources.list", json!({}))
+    }
+
+    pub fn sources_set_enabled(&mut self, id: &str, enabled: bool) -> Result<Value> {
+        call(
+            &mut self.stream,
+            "sources.set_enabled",
+            json!({ "id": id, "enabled": enabled }),
+        )
+    }
+
+    pub fn inference_run_once(&mut self) -> Result<Value> {
+        call(&mut self.stream, "inference.run_once", json!({}))
+    }
 }
 
 fn decode_task(result: Value) -> Result<Task> {

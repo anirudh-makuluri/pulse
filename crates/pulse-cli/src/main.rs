@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand, ValueEnum};
 use pulse_core::ipc::pid::{live_service_pid, process_is_live, read_pid_file};
 use pulse_core::{
-    load_config, open_db, try_connect, IpcClient, NewTask, PulseError, PulsePaths, Store, Task,
-    TaskStatus, TaskUpdate,
+    load_config, open_db, try_connect, write_config, IpcClient, NewTask, PulseError, PulsePaths,
+    Store, Task, TaskStatus, TaskUpdate,
 };
 
 /// Exit codes: 0 ok, 1 user/logic, 2 service unreachable, 3 DB.
@@ -45,6 +45,11 @@ enum Commands {
     Service {
         #[command(subcommand)]
         command: ServiceCmd,
+    },
+    /// Enable/disable work-signal sources
+    Sources {
+        #[command(subcommand)]
+        command: SourcesCmd,
     },
     Version,
 }
@@ -110,6 +115,22 @@ enum ServiceCmd {
     },
     /// Show service status
     Status,
+}
+
+#[derive(Subcommand, Debug)]
+enum SourcesCmd {
+    /// List sources and enabled flags
+    List,
+    /// Enable a source (claude|codex)
+    Enable {
+        id: String,
+    },
+    /// Disable a source
+    Disable {
+        id: String,
+    },
+    /// Trigger one inference scan now (service must be running)
+    Scan,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -230,6 +251,12 @@ fn run() -> Result<(), CliError> {
             ServiceCmd::Start => service_start(&paths),
             ServiceCmd::Stop { force } => service_stop(&paths, force),
             ServiceCmd::Status => service_status(&paths),
+        },
+        Commands::Sources { command } => match command {
+            SourcesCmd::List => sources_list(&paths),
+            SourcesCmd::Enable { id } => sources_set(&paths, &id, true),
+            SourcesCmd::Disable { id } => sources_set(&paths, &id, false),
+            SourcesCmd::Scan => sources_scan(&paths),
         },
         Commands::Tasks { command } => {
             let mut backend = open_backend(&paths, true)?;
@@ -561,6 +588,71 @@ fn service_status(paths: &PulsePaths) -> Result<(), CliError> {
             Ok(())
         }
     }
+}
+
+fn sources_list(paths: &PulsePaths) -> Result<(), CliError> {
+    if let Ok(mut c) = try_connect_from_paths(paths) {
+        let v = c.sources_list()?;
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        return Ok(());
+    }
+    let cfg = load_config(&paths.config_path())?;
+    println!(
+        "claude: {}\ncodex:  {}",
+        if cfg.sources.claude.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if cfg.sources.codex.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    Ok(())
+}
+
+fn sources_set(paths: &PulsePaths, id: &str, enabled: bool) -> Result<(), CliError> {
+    let id = id.to_ascii_lowercase();
+    if id != "claude" && id != "codex" {
+        return Err(CliError::user("source id must be 'claude' or 'codex'"));
+    }
+    // Prefer IPC so running service reloads atomically via sources.set_enabled
+    if let Ok(mut c) = try_connect_from_paths(paths) {
+        c.sources_set_enabled(&id, enabled)?;
+        println!(
+            "source {id} {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+        return Ok(());
+    }
+    let mut cfg = load_config(&paths.config_path())?;
+    match id.as_str() {
+        "claude" => cfg.sources.claude.enabled = enabled,
+        "codex" => cfg.sources.codex.enabled = enabled,
+        _ => unreachable!(),
+    }
+    write_config(&paths.config_path(), &cfg)?;
+    println!(
+        "source {id} {} (service not running; will apply on next start)",
+        if enabled { "enabled" } else { "disabled" }
+    );
+    Ok(())
+}
+
+fn sources_scan(paths: &PulsePaths) -> Result<(), CliError> {
+    let mut c = try_connect_from_paths(paths).map_err(|_| {
+        CliError::service("service must be running for `sources scan` (try `pulse service start`)")
+    })?;
+    let v = c.inference_run_once()?;
+    println!("{}", serde_json::to_string_pretty(&v).unwrap());
+    Ok(())
+}
+
+fn try_connect_from_paths(paths: &PulsePaths) -> Result<IpcClient, PulseError> {
+    let cfg = load_config(&paths.config_path())?;
+    try_connect(&cfg.service.pipe_name)
 }
 
 fn service_command() -> Command {

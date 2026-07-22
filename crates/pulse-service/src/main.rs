@@ -1,4 +1,4 @@
-//! Pulse background service: named-pipe JSON-RPC server.
+//! Pulse background service: named-pipe JSON-RPC server + source inference poller.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,8 +12,10 @@ use pulse_core::ipc::pipe::{self, current_pid};
 use pulse_core::ipc::pid::{remove_pid_file_if_matches, write_pid_file, ServicePidFile};
 use pulse_core::ipc::rpc::{RpcCode, RpcErrorObject, RpcHandler};
 use pulse_core::{
-    load_config, open_db, Config, NewTask, PulseError, PulsePaths, Store, TaskStatus, TaskUpdate,
+    load_config, open_db, write_config, Config, NewTask, PulseError, PulsePaths, Store, TaskStatus,
+    TaskUpdate,
 };
+use pulse_service::pipeline;
 use serde_json::{json, Value};
 
 #[derive(Parser, Debug)]
@@ -28,9 +30,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Run the service in the foreground
     Run {
-        /// Reduce console noise
         #[arg(long)]
         quiet: bool,
     },
@@ -61,18 +61,18 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
     let config = load_config(&paths.config_path())?;
     let pipe_name = config.service.pipe_name.clone();
     let conn = open_db(&paths.db_path())?;
-    let store = Store::new(conn);
+    let store = Arc::new(Mutex::new(Store::new(conn)));
+    let config = Arc::new(Mutex::new(config));
 
     let state = Arc::new(ServiceState {
         paths: paths.clone(),
-        store: Mutex::new(store),
-        config: Mutex::new(config),
+        store: Arc::clone(&store),
+        config: Arc::clone(&config),
         shutdown: Arc::new(AtomicBool::new(false)),
         started_at: Utc::now(),
         pid: current_pid(),
     });
 
-    // Fail fast before writing PID.
     pipe::probe_bind(&pipe_name)?;
 
     let exe_path = std::env::current_exe()
@@ -87,11 +87,15 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
     };
     write_pid_file(&paths.service_pid_path(), &pid_info)?;
 
+    // Start source inference poller (PR4: heuristic only).
+    let pipeline = pipeline::start_pipeline(Arc::clone(&store), Arc::clone(&config), 30);
+
     if !quiet {
         eprintln!(
             "pulse-service listening on pipe '{}' (pid {})",
             pipe_name, state.pid
         );
+        eprintln!("inference poller active (enable sources via `pulse sources enable`)");
         eprintln!("stop with: pulse service stop");
     }
 
@@ -99,6 +103,7 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
     let handler = Arc::clone(&state);
     let result = pipe::serve_loop(&pipe_name, handler, shutdown);
 
+    pipeline.stop();
     let _ = remove_pid_file_if_matches(&paths.service_pid_path(), state.pid, Some(&exe_path));
     result?;
     Ok(())
@@ -106,8 +111,8 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
 
 struct ServiceState {
     paths: PulsePaths,
-    store: Mutex<Store>,
-    config: Mutex<Config>,
+    store: Arc<Mutex<Store>>,
+    config: Arc<Mutex<Config>>,
     shutdown: Arc<AtomicBool>,
     started_at: chrono::DateTime<Utc>,
     pid: u32,
@@ -129,8 +134,13 @@ impl RpcHandler for ServiceState {
                     "pipe_name": cfg.service.pipe_name,
                     "started_at": self.started_at.to_rfc3339(),
                     "data_dir": self.paths.root,
-                    "llm_mode": cfg.llm.provider,
+                    "llm_mode": "heuristic",
                     "queue_depth": 0,
+                    "sources": {
+                        "claude": cfg.sources.claude.enabled,
+                        "codex": cfg.sources.codex.enabled,
+                    },
+                    "inference_enabled": cfg.inference.enabled,
                 }))
             }
             "service.shutdown" => {
@@ -153,6 +163,57 @@ impl RpcHandler for ServiceState {
                 let mut guard = self.config.lock().map_err(|_| internal("config lock"))?;
                 *guard = cfg;
                 Ok(json!({ "ok": true }))
+            }
+            "sources.list" => {
+                let cfg = self.config.lock().map_err(|_| internal("config lock"))?;
+                Ok(json!({
+                    "sources": [
+                        {
+                            "id": "claude",
+                            "enabled": cfg.sources.claude.enabled,
+                            "extra_roots": cfg.sources.claude.extra_roots,
+                        },
+                        {
+                            "id": "codex",
+                            "enabled": cfg.sources.codex.enabled,
+                            "extra_roots": cfg.sources.codex.extra_roots,
+                        }
+                    ]
+                }))
+            }
+            "sources.set_enabled" => {
+                let id = param_str(&params, "id")?;
+                let enabled = params
+                    .get("enabled")
+                    .and_then(|v| v.as_bool())
+                    .ok_or_else(|| {
+                        RpcErrorObject::new(RpcCode::InvalidParams, "missing bool 'enabled'")
+                    })?;
+                let mut cfg = self.config.lock().map_err(|_| internal("config lock"))?;
+                match id.as_str() {
+                    "claude" => cfg.sources.claude.enabled = enabled,
+                    "codex" => cfg.sources.codex.enabled = enabled,
+                    other => {
+                        return Err(RpcErrorObject::new(
+                            RpcCode::InvalidParams,
+                            format!("unknown source '{other}'"),
+                        ));
+                    }
+                }
+                write_config(&self.paths.config_path(), &cfg).map_err(|e| {
+                    RpcErrorObject::new(RpcCode::ConfigError, e.to_string())
+                })?;
+                Ok(json!({ "ok": true, "id": id, "enabled": enabled }))
+            }
+            "inference.run_once" => {
+                // Manual trigger for testing / CLI
+                let cfg = self.config.lock().map_err(|_| internal("config lock"))?.clone();
+                let mut store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let mut last = std::collections::HashMap::new();
+                let mut hour = 0u32;
+                let n = pipeline::run_once(&mut store, &cfg, &mut last, &mut hour)
+                    .map_err(|e| RpcErrorObject::new(RpcCode::InternalError, e))?;
+                Ok(json!({ "ok": true, "created": n }))
             }
             "tasks.list" => {
                 let status = parse_status_filter(&params)?;

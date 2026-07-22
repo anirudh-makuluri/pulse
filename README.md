@@ -15,9 +15,9 @@ Pulse is a local-first task app that turns real work activity into an always-cur
 | Design | [docs/design.md](docs/design.md) |
 | `pulse-core` (models, SQLite, config) | Done |
 | `pulse-cli` | Done (IPC when service up; direct DB fallback) |
-| `pulse-service` (background daemon) | Done (named-pipe JSON-RPC) |
-| Claude / Codex source adapters | Planned |
-| LLM via installed agent CLIs | Planned |
+| `pulse-service` (background daemon) | Done (named-pipe JSON-RPC + poller) |
+| Claude / Codex source adapters | Done (heuristic inference) |
+| LLM via installed agent CLIs | Planned (PR5) |
 | Tauri desktop app | Planned |
 
 ## Product principles
@@ -118,6 +118,7 @@ cargo run -p pulse-cli -- config show
 | `pulse version` | Version |
 
 | `pulse service start\|stop\|status\|run` | Background service control |
+| `pulse sources list\|enable\|disable\|scan` | Work-signal sources (claude/codex) |
 | `pulse config reload` | Reload config in running service |
 
 Global: `--data-dir <DIR>` overrides the data root.
@@ -132,7 +133,10 @@ pulse/
   crates/
     pulse-core/     # domain + SQLite + config + IPC
     pulse-cli/      # `pulse` binary
-    pulse-service/  # background daemon
+    pulse-service/  # background daemon + inference poller
+    pulse-sources/  # Claude/Codex session adapters
+    pulse-llm/      # heuristic (+ agent CLIs later)
+  fixtures/         # sample session JSONL
   docs/
     design.md       # full technical design
   README.md
@@ -143,7 +147,7 @@ pulse/
 1. **PR1** — Workspace + `pulse-core` *(done)*
 2. **PR2** — `pulse-cli` (list / add / done / show) *(done)*
 3. **PR3** — `pulse-service` + Windows named-pipe IPC *(done)*
-4. **PR4** — Claude / Codex sources + heuristic inference
+4. **PR4** — Claude / Codex sources + heuristic inference *(done)*
 5. **PR5** — Agent CLI LLM backends, summaries, check-ins
 6. **PR6** — Tauri Inbox / Today / detail
 7. **PR7** — Settings, export, summary panel, autostart
