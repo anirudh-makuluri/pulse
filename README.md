@@ -14,8 +14,8 @@ Pulse is a local-first task app that turns real work activity into an always-cur
 |---|---|
 | Design | [docs/design.md](docs/design.md) |
 | `pulse-core` (models, SQLite, config) | Done |
-| `pulse-cli` | Done (direct DB; no service yet) |
-| `pulse-service` (background daemon) | Planned |
+| `pulse-cli` | Done (IPC when service up; direct DB fallback) |
+| `pulse-service` (background daemon) | Done (named-pipe JSON-RPC) |
 | Claude / Codex source adapters | Planned |
 | LLM via installed agent CLIs | Planned |
 | Tauri desktop app | Planned |
@@ -117,7 +117,12 @@ cargo run -p pulse-cli -- config show
 | `pulse config show` / `path` | Config |
 | `pulse version` | Version |
 
+| `pulse service start\|stop\|status\|run` | Background service control |
+| `pulse config reload` | Reload config in running service |
+
 Global: `--data-dir <DIR>` overrides the data root.
+
+With the service running, task commands use JSON-RPC over a Windows named pipe. If the service is down, the CLI falls back to direct SQLite access.
 
 ### Workspace layout
 
@@ -125,8 +130,9 @@ Global: `--data-dir <DIR>` overrides the data root.
 pulse/
   Cargo.toml
   crates/
-    pulse-core/     # domain + SQLite + config
+    pulse-core/     # domain + SQLite + config + IPC
     pulse-cli/      # `pulse` binary
+    pulse-service/  # background daemon
   docs/
     design.md       # full technical design
   README.md
@@ -136,7 +142,7 @@ pulse/
 
 1. **PR1** — Workspace + `pulse-core` *(done)*
 2. **PR2** — `pulse-cli` (list / add / done / show) *(done)*
-3. **PR3** — `pulse-service` + Windows named-pipe IPC
+3. **PR3** — `pulse-service` + Windows named-pipe IPC *(done)*
 4. **PR4** — Claude / Codex sources + heuristic inference
 5. **PR5** — Agent CLI LLM backends, summaries, check-ins
 6. **PR6** — Tauri Inbox / Today / detail

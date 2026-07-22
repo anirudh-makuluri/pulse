@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pulse-core", "crates/pulse-cli"]
+members = ["crates/pulse-core", "crates/pulse-cli", "crates/pulse-service"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,3 +19,17 @@ thiserror = "2"
 toml = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
 pulse-core = { path = "crates/pulse-core" }
+
+[workspace.dependencies.windows-sys]
+version = "0.59"
+features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+  "Win32_Storage_FileSystem",
+  "Win32_System_SystemServices",
+  "Win32_System_Memory",
+]

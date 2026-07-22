@@ -1,25 +1,27 @@
-//! Pulse CLI — direct SQLite access for PR2 (service/IPC comes in PR3).
+//! Pulse CLI — prefers IPC when the service is up; otherwise direct SQLite.
 
-use std::path::PathBuf;
-use std::process::ExitCode;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode, Stdio};
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, ValueEnum};
+use pulse_core::ipc::pid::{live_service_pid, process_is_live, read_pid_file};
 use pulse_core::{
-    load_config, open_db, NewTask, PulseError, PulsePaths, Store, Task, TaskStatus, TaskUpdate,
+    load_config, open_db, try_connect, IpcClient, NewTask, PulseError, PulsePaths, Store, Task,
+    TaskStatus, TaskUpdate,
 };
-use uuid::Uuid;
 
-/// Exit codes per design: 0 ok, 1 user/logic, 2 service (unused until PR3), 3 DB.
+/// Exit codes: 0 ok, 1 user/logic, 2 service unreachable, 3 DB.
 const EXIT_OK: u8 = 0;
 const EXIT_USER: u8 = 1;
+const EXIT_SERVICE: u8 = 2;
 const EXIT_DB: u8 = 3;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "pulse",
     version,
-    about = "Pulse — local-first todo that stays current",
-    long_about = None
+    about = "Pulse — local-first todo that stays current"
 )]
 struct Cli {
     /// Override data directory (default: %LOCALAPPDATA%\\Pulse)
@@ -32,50 +34,42 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Manage tasks
     Tasks {
         #[command(subcommand)]
         command: TasksCmd,
     },
-    /// Show or locate config
     Config {
         #[command(subcommand)]
         command: ConfigCmd,
     },
-    /// Print version
+    Service {
+        #[command(subcommand)]
+        command: ServiceCmd,
+    },
     Version,
 }
 
 #[derive(Subcommand, Debug)]
 enum TasksCmd {
-    /// List tasks
     List {
         #[arg(long, value_enum)]
         status: Option<StatusArg>,
-        /// Emit JSON instead of a table
         #[arg(long)]
         json: bool,
     },
-    /// Show one task
     Show {
-        /// Task id (full UUID or unique prefix)
         id: String,
     },
-    /// Add a task
     Add {
-        /// Task title
         title: Vec<String>,
-        /// Place in Today instead of Inbox
         #[arg(long)]
         today: bool,
         #[arg(long)]
         notes: Option<String>,
     },
-    /// Mark a task done
     Done {
         id: String,
     },
-    /// Update task fields
     Update {
         id: String,
         #[arg(long)]
@@ -85,7 +79,6 @@ enum TasksCmd {
         #[arg(long)]
         notes: Option<String>,
     },
-    /// Move a task to a status
     Move {
         id: String,
         #[arg(value_enum)]
@@ -95,10 +88,28 @@ enum TasksCmd {
 
 #[derive(Subcommand, Debug)]
 enum ConfigCmd {
-    /// Print resolved config as TOML
     Show,
-    /// Print config file path
     Path,
+    /// Reload config in a running service (no-op offline)
+    Reload,
+}
+
+#[derive(Subcommand, Debug)]
+enum ServiceCmd {
+    /// Run service in foreground (delegates to pulse-service)
+    Run {
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Start service in background and wait until ping succeeds
+    Start,
+    /// Stop running service
+    Stop {
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show service status
+    Status,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -122,95 +133,71 @@ impl From<StatusArg> for TaskStatus {
     }
 }
 
+enum Backend {
+    Ipc(IpcClient),
+    Direct(Store),
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::from(EXIT_OK),
         Err(e) => {
             eprintln!("error: {e}");
-            ExitCode::from(exit_code_for(&e))
+            ExitCode::from(e.exit_code())
         }
     }
 }
 
-fn exit_code_for(err: &anyhow::Error) -> u8 {
-    if let Some(pe) = err.downcast_ref::<PulseError>() {
-        return match pe {
-            PulseError::Database(_) | PulseError::SchemaTooNew { .. } => EXIT_DB,
-            PulseError::Io(_) => EXIT_DB,
+struct CliError {
+    msg: String,
+    code: u8,
+}
+
+impl CliError {
+    fn user(m: impl Into<String>) -> Self {
+        Self {
+            msg: m.into(),
+            code: EXIT_USER,
+        }
+    }
+    fn service(m: impl Into<String>) -> Self {
+        Self {
+            msg: m.into(),
+            code: EXIT_SERVICE,
+        }
+    }
+    fn exit_code(&self) -> u8 {
+        self.code
+    }
+}
+
+impl std::fmt::Display for CliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+
+impl From<PulseError> for CliError {
+    fn from(e: PulseError) -> Self {
+        let code = match &e {
+            PulseError::Database(_) | PulseError::SchemaTooNew { .. } | PulseError::Io(_) => {
+                EXIT_DB
+            }
+            PulseError::ServiceUnreachable => EXIT_SERVICE,
+            PulseError::Ipc(_) => EXIT_SERVICE,
             _ => EXIT_USER,
         };
+        Self {
+            msg: e.to_string(),
+            code,
+        }
     }
-    EXIT_USER
 }
 
-/// Thin anyhow-like wrapper so we can attach context without a dep.
-mod anyhow {
-    use std::fmt;
-
-    pub type Result<T> = std::result::Result<T, Error>;
-
-    #[derive(Debug)]
-    pub struct Error {
-        msg: String,
-        source: Option<Box<dyn std::error::Error + Send + Sync>>,
-    }
-
-    impl Error {
-        pub fn msg(m: impl Into<String>) -> Self {
-            Self {
-                msg: m.into(),
-                source: None,
-            }
-        }
-
-        pub fn downcast_ref<E: std::error::Error + 'static>(&self) -> Option<&E> {
-            self.source.as_ref()?.downcast_ref::<E>()
-        }
-    }
-
-    impl fmt::Display for Error {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}", self.msg)?;
-            if let Some(s) = &self.source {
-                write!(f, ": {s}")?;
-            }
-            Ok(())
-        }
-    }
-
-    impl std::error::Error for Error {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            self.source
-                .as_ref()
-                .map(|e| e.as_ref() as &(dyn std::error::Error + 'static))
-        }
-    }
-
-    impl From<PulseError> for Error {
-        fn from(e: PulseError) -> Self {
-            Self {
-                msg: e.to_string(),
-                source: Some(Box::new(e)),
-            }
-        }
-    }
-
-    impl From<std::io::Error> for Error {
-        fn from(e: std::io::Error) -> Self {
-            Self {
-                msg: e.to_string(),
-                source: Some(Box::new(e)),
-            }
-        }
-    }
-
-    use pulse_core::PulseError;
-}
-
-fn run() -> anyhow::Result<()> {
+fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     let paths = resolve_paths(cli.data_dir)?;
-    paths.ensure_layout()?;
+    paths.ensure_layout().map_err(PulseError::from)?;
 
     match cli.command {
         Commands::Version => {
@@ -227,26 +214,44 @@ fn run() -> anyhow::Result<()> {
                 print!("{}", cfg.to_toml_string()?);
                 Ok(())
             }
+            ConfigCmd::Reload => {
+                let mut be = open_backend(&paths, true)?;
+                if let Backend::Ipc(c) = &mut be {
+                    c.config_reload()?;
+                    println!("config reloaded");
+                } else {
+                    println!("service not running; config will load on next start");
+                }
+                Ok(())
+            }
+        },
+        Commands::Service { command } => match command {
+            ServiceCmd::Run { quiet } => service_run(&paths, quiet),
+            ServiceCmd::Start => service_start(&paths),
+            ServiceCmd::Stop { force } => service_stop(&paths, force),
+            ServiceCmd::Status => service_status(&paths),
         },
         Commands::Tasks { command } => {
-            let store = open_store(&paths)?;
+            let mut backend = open_backend(&paths, true)?;
             match command {
                 TasksCmd::List { status, json } => {
                     let filter = status.map(TaskStatus::from);
-                    let tasks = store.list_tasks(filter)?;
+                    let tasks = tasks_list(&mut backend, filter)?;
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&tasks).map_err(|e| {
-                            anyhow::Error::msg(format!("json encode: {e}"))
-                        })?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&tasks).map_err(|e| {
+                                CliError::user(format!("json encode: {e}"))
+                            })?
+                        );
                     } else {
                         print_task_table(&tasks);
                     }
                     Ok(())
                 }
                 TasksCmd::Show { id } => {
-                    let task = resolve_task(&store, &id)?;
+                    let (task, evidence) = tasks_get(&mut backend, &id)?;
                     print_task_detail(&task);
-                    let evidence = store.list_evidence(task.id)?;
                     if !evidence.is_empty() {
                         println!();
                         println!("Evidence:");
@@ -268,20 +273,19 @@ fn run() -> anyhow::Result<()> {
                 } => {
                     let title = title.join(" ");
                     if title.trim().is_empty() {
-                        return Err(anyhow::Error::msg("title must not be empty"));
+                        return Err(CliError::user("title must not be empty"));
                     }
-                    let mut new = NewTask::manual(title);
-                    if today {
-                        new.status = TaskStatus::Today;
-                    }
-                    new.notes = notes;
-                    let task = store.create_task(new)?;
+                    let status = if today {
+                        Some(TaskStatus::Today)
+                    } else {
+                        None
+                    };
+                    let task = tasks_create(&mut backend, &title, status, notes)?;
                     println!("{}  {}", short_id(&task.id), task.title);
                     Ok(())
                 }
                 TasksCmd::Done { id } => {
-                    let task = resolve_task(&store, &id)?;
-                    let task = store.mark_done(task.id)?;
+                    let task = tasks_done(&mut backend, &id)?;
                     println!("done  {}  {}", short_id(&task.id), task.title);
                     Ok(())
                 }
@@ -292,19 +296,16 @@ fn run() -> anyhow::Result<()> {
                     notes,
                 } => {
                     if title.is_none() && status.is_none() && notes.is_none() {
-                        return Err(anyhow::Error::msg(
+                        return Err(CliError::user(
                             "provide at least one of --title, --status, --notes",
                         ));
                     }
-                    let task = resolve_task(&store, &id)?;
-                    let task = store.update_task(
-                        task.id,
-                        TaskUpdate {
-                            title,
-                            status: status.map(TaskStatus::from),
-                            notes,
-                            ..Default::default()
-                        },
+                    let task = tasks_update(
+                        &mut backend,
+                        &id,
+                        title,
+                        status.map(TaskStatus::from),
+                        notes,
                     )?;
                     println!(
                         "updated  {}  [{}]  {}",
@@ -315,8 +316,8 @@ fn run() -> anyhow::Result<()> {
                     Ok(())
                 }
                 TasksCmd::Move { id, status } => {
-                    let task = resolve_task(&store, &id)?;
-                    let task = store.set_status(task.id, status.into())?;
+                    let task =
+                        tasks_update(&mut backend, &id, None, Some(status.into()), None)?;
                     println!(
                         "moved  {}  -> {}  {}",
                         short_id(&task.id),
@@ -330,53 +331,282 @@ fn run() -> anyhow::Result<()> {
     }
 }
 
-fn resolve_paths(data_dir: Option<PathBuf>) -> anyhow::Result<PulsePaths> {
+fn resolve_paths(data_dir: Option<PathBuf>) -> Result<PulsePaths, CliError> {
     match data_dir {
         Some(dir) => Ok(PulsePaths::new(dir)),
         None => Ok(PulsePaths::default()?),
     }
 }
 
-fn open_store(paths: &PulsePaths) -> anyhow::Result<Store> {
-    let conn = open_db(&paths.db_path())?;
-    Ok(Store::new(conn))
-}
+/// Offline write policy from design.
+fn open_backend(paths: &PulsePaths, for_write: bool) -> Result<Backend, CliError> {
+    let cfg = load_config(&paths.config_path())?;
+    let pipe = &cfg.service.pipe_name;
+    let live = live_service_pid(&paths.service_pid_path())?;
 
-fn resolve_task(store: &Store, id_or_prefix: &str) -> anyhow::Result<Task> {
-    let raw = id_or_prefix.trim();
-    if raw.is_empty() {
-        return Err(anyhow::Error::msg("task id is empty"));
-    }
-
-    if let Ok(uuid) = Uuid::parse_str(raw) {
-        return store
-            .get_task(uuid)?
-            .ok_or_else(|| anyhow::Error::msg(format!("task not found: {raw}")));
-    }
-
-    let needle = raw.to_ascii_lowercase();
-    let all = store.list_tasks(None)?;
-    let matches: Vec<_> = all
-        .into_iter()
-        .filter(|t| {
-            t.id.as_hyphenated()
-                .to_string()
-                .to_ascii_lowercase()
-                .starts_with(&needle)
-                || t.id.simple().to_string().to_ascii_lowercase().starts_with(&needle)
-        })
-        .collect();
-
-    match matches.len() {
-        0 => Err(anyhow::Error::msg(format!("task not found: {raw}"))),
-        1 => Ok(matches.into_iter().next().unwrap()),
-        n => Err(anyhow::Error::msg(format!(
-            "ambiguous id prefix '{raw}' matches {n} tasks; use a longer prefix"
-        ))),
+    match try_connect(pipe) {
+        Ok(client) => Ok(Backend::Ipc(client)),
+        Err(_) => {
+            if live.is_some() {
+                if for_write {
+                    return Err(CliError::service(
+                        "service PID is live but IPC is unreachable; try `pulse service stop` or check logs",
+                    ));
+                }
+                // read-only direct
+                eprintln!("warning: service unreachable; opening DB read-only path via direct store");
+            } else {
+                eprintln!("warning: service not running; using direct database access");
+            }
+            let conn = open_db(&paths.db_path())?;
+            Ok(Backend::Direct(Store::new(conn)))
+        }
     }
 }
 
-fn short_id(id: &Uuid) -> String {
+fn tasks_list(be: &mut Backend, status: Option<TaskStatus>) -> Result<Vec<Task>, CliError> {
+    match be {
+        Backend::Ipc(c) => Ok(c.tasks_list(status)?),
+        Backend::Direct(s) => Ok(s.list_tasks(status)?),
+    }
+}
+
+fn tasks_get(
+    be: &mut Backend,
+    id: &str,
+) -> Result<(Task, Vec<pulse_core::Evidence>), CliError> {
+    match be {
+        Backend::Ipc(c) => Ok(c.tasks_get(id)?),
+        Backend::Direct(s) => {
+            let task = s.resolve_task(id)?;
+            let evidence = s.list_evidence(task.id)?;
+            Ok((task, evidence))
+        }
+    }
+}
+
+fn tasks_create(
+    be: &mut Backend,
+    title: &str,
+    status: Option<TaskStatus>,
+    notes: Option<String>,
+) -> Result<Task, CliError> {
+    match be {
+        Backend::Ipc(c) => Ok(c.tasks_create(title, status, notes)?),
+        Backend::Direct(s) => {
+            let mut new = NewTask::manual(title);
+            if let Some(st) = status {
+                new.status = st;
+            }
+            new.notes = notes;
+            Ok(s.create_task(new)?)
+        }
+    }
+}
+
+fn tasks_done(be: &mut Backend, id: &str) -> Result<Task, CliError> {
+    match be {
+        Backend::Ipc(c) => Ok(c.tasks_done(id)?),
+        Backend::Direct(s) => {
+            let task = s.resolve_task(id)?;
+            Ok(s.mark_done(task.id)?)
+        }
+    }
+}
+
+fn tasks_update(
+    be: &mut Backend,
+    id: &str,
+    title: Option<String>,
+    status: Option<TaskStatus>,
+    notes: Option<String>,
+) -> Result<Task, CliError> {
+    match be {
+        Backend::Ipc(c) => Ok(c.tasks_update(id, title, status, notes)?),
+        Backend::Direct(s) => {
+            let task = s.resolve_task(id)?;
+            Ok(s.update_task(
+                task.id,
+                TaskUpdate {
+                    title,
+                    status,
+                    notes,
+                    ..Default::default()
+                },
+            )?)
+        }
+    }
+}
+
+fn service_run(paths: &PulsePaths, quiet: bool) -> Result<(), CliError> {
+    let mut cmd = service_command();
+    cmd.arg("run");
+    if quiet {
+        cmd.arg("--quiet");
+    }
+    cmd.arg("--data-dir").arg(&paths.root);
+    let status = cmd
+        .status()
+        .map_err(|e| CliError::user(format!("failed to launch pulse-service: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CliError::user(format!(
+            "pulse-service exited with {status}"
+        )))
+    }
+}
+
+fn service_start(paths: &PulsePaths) -> Result<(), CliError> {
+    let cfg = load_config(&paths.config_path())?;
+    if let Some(info) = live_service_pid(&paths.service_pid_path())? {
+        if try_connect(&cfg.service.pipe_name).is_ok() {
+            return Err(CliError::user(format!(
+                "service already running (pid {})",
+                info.pid
+            )));
+        }
+        return Err(CliError::service(format!(
+            "pid {} is live but pipe is dead; try `pulse service stop --force`",
+            info.pid
+        )));
+    }
+
+    let mut cmd = service_command();
+    cmd.arg("run")
+        .arg("--quiet")
+        .arg("--data-dir")
+        .arg(&paths.root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    }
+
+    cmd.spawn()
+        .map_err(|e| CliError::user(format!("failed to start pulse-service: {e}")))?;
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        if let Ok(mut c) = try_connect(&cfg.service.pipe_name) {
+            if c.ping().is_ok() {
+                println!("service started");
+                return Ok(());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(CliError::service(
+        "service did not become ready within 15s (ping failed)",
+    ))
+}
+
+fn service_stop(paths: &PulsePaths, force: bool) -> Result<(), CliError> {
+    let cfg = load_config(&paths.config_path())?;
+    if let Ok(mut c) = try_connect(&cfg.service.pipe_name) {
+        let _ = c.service_shutdown();
+        // wait for exit
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if live_service_pid(&paths.service_pid_path())?.is_none() {
+                println!("service stopped");
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    if let Some(info) = read_pid_file(&paths.service_pid_path()).map_err(PulseError::from)? {
+        if process_is_live(info.pid) {
+            if force {
+                force_kill(info.pid)?;
+                let _ = std::fs::remove_file(paths.service_pid_path());
+                println!("service force-stopped (pid {})", info.pid);
+                return Ok(());
+            }
+            return Err(CliError::service(format!(
+                "service pid {} still live; re-run with --force",
+                info.pid
+            )));
+        }
+        let _ = std::fs::remove_file(paths.service_pid_path());
+    }
+    println!("service not running");
+    Ok(())
+}
+
+fn service_status(paths: &PulsePaths) -> Result<(), CliError> {
+    let cfg = load_config(&paths.config_path())?;
+    match try_connect(&cfg.service.pipe_name) {
+        Ok(mut c) => {
+            let status = c.service_status()?;
+            println!("{}", serde_json::to_string_pretty(&status).unwrap());
+            Ok(())
+        }
+        Err(_) => {
+            if let Some(info) = live_service_pid(&paths.service_pid_path())? {
+                println!(
+                    "pid {} live but IPC unreachable (pipe {})",
+                    info.pid, info.pipe_name
+                );
+                return Err(CliError::service("service unhealthy"));
+            }
+            println!("service not running");
+            Ok(())
+        }
+    }
+}
+
+fn service_command() -> Command {
+    // Prefer pulse-service next to this binary, else PATH.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(if cfg!(windows) {
+                "pulse-service.exe"
+            } else {
+                "pulse-service"
+            });
+            if candidate.exists() {
+                return Command::new(candidate);
+            }
+        }
+    }
+    Command::new("pulse-service")
+}
+
+#[cfg(windows)]
+fn force_kill(pid: u32) -> Result<(), CliError> {
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .status()
+        .map_err(|e| CliError::user(format!("taskkill failed: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CliError::user(format!("taskkill exited {status}")))
+    }
+}
+
+#[cfg(not(windows))]
+fn force_kill(pid: u32) -> Result<(), CliError> {
+    let status = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .map_err(|e| CliError::user(format!("kill failed: {e}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CliError::user(format!("kill exited {status}")))
+    }
+}
+
+fn short_id(id: &uuid::Uuid) -> String {
     id.as_hyphenated().to_string()[..8].to_string()
 }
 
@@ -424,3 +654,7 @@ fn print_task_detail(task: &Task) {
         println!("completed:  {}", c.to_rfc3339());
     }
 }
+
+// silence unused import on some cfgs
+#[allow(dead_code)]
+fn _path_ty(_: &Path) {}

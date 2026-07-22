@@ -287,6 +287,34 @@ impl Store {
             .optional()?;
         Ok(task)
     }
+
+    /// Resolve a full UUID or unique id prefix to a task.
+    pub fn resolve_task(&self, id_or_prefix: &str) -> Result<Task> {
+        let raw = id_or_prefix.trim();
+        if raw.is_empty() {
+            return Err(PulseError::Validation("task id is empty".into()));
+        }
+        if let Ok(uuid) = Uuid::parse_str(raw) {
+            return self
+                .get_task(uuid)?
+                .ok_or_else(|| PulseError::TaskNotFound(raw.to_string()));
+        }
+        let needle = raw.to_ascii_lowercase();
+        let all = self.list_tasks(None)?;
+        let matches: Vec<_> = all
+            .into_iter()
+            .filter(|t| {
+                let hyphen = t.id.as_hyphenated().to_string().to_ascii_lowercase();
+                let simple = t.id.simple().to_string().to_ascii_lowercase();
+                hyphen.starts_with(&needle) || simple.starts_with(&needle)
+            })
+            .collect();
+        match matches.len() {
+            0 => Err(PulseError::TaskNotFound(raw.to_string())),
+            1 => Ok(matches.into_iter().next().unwrap()),
+            _ => Err(PulseError::AmbiguousTaskId(raw.to_string())),
+        }
+    }
 }
 
 fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {

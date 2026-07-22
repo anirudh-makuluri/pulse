@@ -22,6 +22,15 @@ pub enum PulseError {
 
     #[error("schema version newer than binary supports (db={db}, binary={binary})")]
     SchemaTooNew { db: i64, binary: i64 },
+
+    #[error("ipc error: {0}")]
+    Ipc(String),
+
+    #[error("service is running but IPC is unreachable; try `pulse service stop` or check logs")]
+    ServiceUnreachable,
+
+    #[error("ambiguous task id prefix '{0}'")]
+    AmbiguousTaskId(String),
 }
 
 pub type Result<T> = std::result::Result<T, PulseError>;
