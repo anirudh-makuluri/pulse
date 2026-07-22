@@ -14,7 +14,7 @@ Pulse is a local-first task app that turns real work activity into an always-cur
 |---|---|
 | Design | [docs/design.md](docs/design.md) |
 | `pulse-core` (models, SQLite, config) | Done |
-| `pulse-cli` | Planned |
+| `pulse-cli` | Done (direct DB; no service yet) |
 | `pulse-service` (background daemon) | Planned |
 | Claude / Codex source adapters | Planned |
 | LLM via installed agent CLIs | Planned |
@@ -89,8 +89,35 @@ Default root (Windows): `%LOCALAPPDATA%\Pulse\`
 ```bash
 # From repo root
 cargo test -p pulse-core
-cargo build
+cargo test -p pulse-cli
+cargo build --release
 ```
+
+### CLI (PR2)
+
+```bash
+# Use a temp data dir while developing
+cargo run -p pulse-cli -- --data-dir ./tmp-data tasks add "Ship the CLI"
+cargo run -p pulse-cli -- --data-dir ./tmp-data tasks list
+cargo run -p pulse-cli -- --data-dir ./tmp-data tasks done <id-prefix>
+
+# Default data: %LOCALAPPDATA%\Pulse\
+cargo run -p pulse-cli -- tasks list
+cargo run -p pulse-cli -- config show
+```
+
+| Command | Description |
+|---|---|
+| `pulse tasks list [--status …] [--json]` | List tasks |
+| `pulse tasks add <title> [--today] [--notes …]` | Create task |
+| `pulse tasks show <id>` | Detail + evidence |
+| `pulse tasks done <id>` | Mark done |
+| `pulse tasks update <id> [--title] [--status] [--notes]` | Patch fields |
+| `pulse tasks move <id> <status>` | Change status |
+| `pulse config show` / `path` | Config |
+| `pulse version` | Version |
+
+Global: `--data-dir <DIR>` overrides the data root.
 
 ### Workspace layout
 
@@ -99,6 +126,7 @@ pulse/
   Cargo.toml
   crates/
     pulse-core/     # domain + SQLite + config
+    pulse-cli/      # `pulse` binary
   docs/
     design.md       # full technical design
   README.md
@@ -107,7 +135,7 @@ pulse/
 ## Roadmap (MVP)
 
 1. **PR1** — Workspace + `pulse-core` *(done)*
-2. **PR2** — `pulse-cli` (list / add / done / show)
+2. **PR2** — `pulse-cli` (list / add / done / show) *(done)*
 3. **PR3** — `pulse-service` + Windows named-pipe IPC
 4. **PR4** — Claude / Codex sources + heuristic inference
 5. **PR5** — Agent CLI LLM backends, summaries, check-ins

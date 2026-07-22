@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pulse-core"]
+members = ["crates/pulse-core", "crates/pulse-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,6 +10,7 @@ repository = "https://github.com/local/pulse"
 
 [workspace.dependencies]
 chrono = { version = "0.4", features = ["serde", "clock"] }
+clap = { version = "4", features = ["derive"] }
 directories = "5"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -17,3 +18,4 @@ serde_json = "1"
 thiserror = "2"
 toml = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
+pulse-core = { path = "crates/pulse-core" }
