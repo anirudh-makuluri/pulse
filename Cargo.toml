@@ -6,6 +6,7 @@ members = [
   "crates/pulse-service",
   "crates/pulse-sources",
   "crates/pulse-llm",
+  "apps/pulse-app/src-tauri",
 ]
 
 [workspace.package]

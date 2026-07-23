@@ -18,7 +18,7 @@ Pulse is a local-first task app that turns real work activity into an always-cur
 | `pulse-service` (background daemon) | Done (named-pipe JSON-RPC + poller) |
 | Claude / Codex source adapters | Done (heuristic inference) |
 | LLM via installed agent CLIs | Done (PR5; gated by privacy ack) |
-| Tauri desktop app | Planned |
+| Tauri desktop app | Done (Inbox/Today/detail) |
 
 ## Product principles
 
@@ -93,6 +93,16 @@ cargo test -p pulse-cli
 cargo build --release
 ```
 
+### Desktop app (PR6)
+
+```bash
+cd apps/pulse-app
+npm install
+npm run tauri dev
+```
+
+Shows Inbox / Today / other statuses, quick add, task detail with evidence, and polls every 4s. Uses the same DB/IPC as the CLI (service if running, else direct SQLite).
+
 ### CLI (PR2)
 
 ```bash
@@ -139,7 +149,9 @@ pulse/
     pulse-cli/      # `pulse` binary
     pulse-service/  # background daemon + inference poller
     pulse-sources/  # Claude/Codex session adapters
-    pulse-llm/      # heuristic (+ agent CLIs later)
+    pulse-llm/      # heuristic + agent CLIs
+  apps/
+    pulse-app/      # Tauri desktop UI
   fixtures/         # sample session JSONL
   docs/
     design.md       # full technical design
@@ -153,7 +165,7 @@ pulse/
 3. **PR3** — `pulse-service` + Windows named-pipe IPC *(done)*
 4. **PR4** — Claude / Codex sources + heuristic inference *(done)*
 5. **PR5** — Agent CLI LLM backends, summaries, check-ins *(done)*
-6. **PR6** — Tauri Inbox / Today / detail
+6. **PR6** — Tauri Inbox / Today / detail *(done)*
 7. **PR7** — Settings, export, summary panel, autostart
 
 Details and acceptance criteria: [docs/design.md](docs/design.md).
