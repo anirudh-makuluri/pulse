@@ -18,7 +18,7 @@ Pulse is a local-first task app that turns real work activity into an always-cur
 | `pulse-service` (background daemon) | Done (named-pipe JSON-RPC + poller) |
 | Claude / Codex source adapters | Done (heuristic inference) |
 | LLM via installed agent CLIs | Done (PR5; gated by privacy ack) |
-| Tauri desktop app | Done (Inbox/Today/detail) |
+| Tauri desktop app | Done (tasks + settings + summary + export) |
 
 ## Product principles
 
@@ -101,7 +101,7 @@ npm install
 npm run tauri dev
 ```
 
-Shows Inbox / Today / other statuses, quick add, task detail with evidence, and polls every 4s. Uses the same DB/IPC as the CLI (service if running, else direct SQLite).
+Shows Inbox / Today / other statuses, quick add, task detail with evidence, **Summary** and **Settings** panels (sources, privacy ack, export), and polls every 4s. Uses the same DB/IPC as the CLI (service if running, else direct SQLite).
 
 ### CLI (PR2)
 
@@ -133,6 +133,9 @@ cargo run -p pulse-cli -- config show
 | `pulse llm status` | Which backend resolved (heuristic/grok/…) |
 | `pulse summary generate\|show` | Daily summary |
 | `pulse checkin list\|answer` | Light check-ins |
+| `pulse export history [--format json\|md]` | Export tasks + evidence |
+| `pulse service install-autostart` | Windows logon Task Scheduler entry |
+| `pulse service uninstall-autostart` | Remove autostart task |
 | `pulse config reload` | Reload config in running service |
 
 Global: `--data-dir <DIR>` overrides the data root.
@@ -166,7 +169,7 @@ pulse/
 4. **PR4** — Claude / Codex sources + heuristic inference *(done)*
 5. **PR5** — Agent CLI LLM backends, summaries, check-ins *(done)*
 6. **PR6** — Tauri Inbox / Today / detail *(done)*
-7. **PR7** — Settings, export, summary panel, autostart
+7. **PR7** — Settings, export, summary panel, autostart *(done)*
 
 Details and acceptance criteria: [docs/design.md](docs/design.md).
 

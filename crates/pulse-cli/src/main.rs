@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand, ValueEnum};
 use pulse_core::ipc::pid::{live_service_pid, process_is_live, read_pid_file};
 use pulse_core::{
-    apply_checkin_answer, load_config, open_db, parse_answer_input, try_connect, write_config,
-    IpcClient, NewTask, PulseError, PulsePaths, Store, Task, TaskStatus, TaskUpdate,
+    apply_checkin_answer, export_history, load_config, open_db, parse_answer_input, try_connect,
+    write_config, ExportFormat, IpcClient, NewTask, PulseError, PulsePaths, Store, Task,
+    TaskStatus, TaskUpdate,
 };
 use pulse_llm::{llm_status, probe_preference};
 
@@ -71,6 +72,11 @@ enum Commands {
     Checkin {
         #[command(subcommand)]
         command: CheckinCmd,
+    },
+    /// Export task history
+    Export {
+        #[command(subcommand)]
+        command: ExportCmd,
     },
     Version,
 }
@@ -136,6 +142,10 @@ enum ServiceCmd {
     },
     /// Show service status
     Status,
+    /// Install Windows logon autostart (Task Scheduler)
+    InstallAutostart,
+    /// Remove Windows logon autostart
+    UninstallAutostart,
 }
 
 #[derive(Subcommand, Debug)]
@@ -192,6 +202,21 @@ enum CheckinCmd {
         id: String,
         /// e.g. yes | no | {"done":true} | {"next_action":"..."}
         response: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ExportCmd {
+    /// Export task history (+ evidence)
+    History {
+        #[arg(long, default_value = "json")]
+        format: String,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -313,6 +338,16 @@ fn run() -> Result<(), CliError> {
             ServiceCmd::Start => service_start(&paths),
             ServiceCmd::Stop { force } => service_stop(&paths, force),
             ServiceCmd::Status => service_status(&paths),
+            ServiceCmd::InstallAutostart => service_install_autostart(&paths),
+            ServiceCmd::UninstallAutostart => service_uninstall_autostart(),
+        },
+        Commands::Export { command } => match command {
+            ExportCmd::History {
+                format,
+                from,
+                to,
+                out,
+            } => export_cmd(&paths, &format, from, to, out),
         },
         Commands::Sources { command } => match command {
             SourcesCmd::List => sources_list(&paths),
@@ -890,6 +925,135 @@ fn sources_scan(paths: &PulsePaths) -> Result<(), CliError> {
 fn try_connect_from_paths(paths: &PulsePaths) -> Result<IpcClient, PulseError> {
     let cfg = load_config(&paths.config_path())?;
     try_connect(&cfg.service.pipe_name)
+}
+
+fn export_cmd(
+    paths: &PulsePaths,
+    format: &str,
+    from: Option<String>,
+    to: Option<String>,
+    out: Option<PathBuf>,
+) -> Result<(), CliError> {
+    let fmt = ExportFormat::parse(format)
+        .ok_or_else(|| CliError::user("format must be json or md"))?;
+    if let Ok(mut c) = try_connect_from_paths(paths) {
+        let mut params = serde_json::json!({
+            "format": match fmt {
+                ExportFormat::Json => "json",
+                ExportFormat::Markdown => "md",
+            },
+        });
+        if let Some(f) = &from {
+            params["from"] = serde_json::json!(f);
+        }
+        if let Some(t) = &to {
+            params["to"] = serde_json::json!(t);
+        }
+        if let Some(o) = &out {
+            params["out"] = serde_json::json!(o);
+        }
+        let v = c.call_raw("export.history", params)?;
+        if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
+            println!("{p}");
+        } else {
+            println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        }
+        return Ok(());
+    }
+    let conn = open_db(&paths.db_path())?;
+    let store = Store::new(conn);
+    let path = export_history(
+        &store,
+        paths,
+        fmt,
+        from.as_deref(),
+        to.as_deref(),
+        out.as_deref(),
+    )?;
+    println!("{}", path.display());
+    Ok(())
+}
+
+fn service_install_autostart(paths: &PulsePaths) -> Result<(), CliError> {
+    #[cfg(not(windows))]
+    {
+        let _ = paths;
+        return Err(CliError::user(
+            "install-autostart is only implemented on Windows (schtasks)",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        let exe = resolve_service_exe()?;
+        let data = paths.root.display().to_string();
+        // Quote paths for Task Scheduler.
+        let tr = format!("\"{}\" run --quiet --data-dir \"{}\"", exe.display(), data);
+        let status = Command::new("schtasks")
+            .args([
+                "/Create",
+                "/TN",
+                "PulseService",
+                "/SC",
+                "ONLOGON",
+                "/RL",
+                "LIMITED",
+                "/TR",
+                &tr,
+                "/F",
+            ])
+            .status()
+            .map_err(|e| CliError::user(format!("schtasks failed: {e}")))?;
+        if !status.success() {
+            return Err(CliError::user(format!(
+                "schtasks exited {status}; try running from an elevated prompt if needed"
+            )));
+        }
+        println!("installed logon task: PulseService");
+        println!("command: {tr}");
+        Ok(())
+    }
+}
+
+fn service_uninstall_autostart() -> Result<(), CliError> {
+    #[cfg(not(windows))]
+    {
+        return Err(CliError::user(
+            "uninstall-autostart is only implemented on Windows (schtasks)",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        let status = Command::new("schtasks")
+            .args(["/Delete", "/TN", "PulseService", "/F"])
+            .status()
+            .map_err(|e| CliError::user(format!("schtasks failed: {e}")))?;
+        if !status.success() {
+            return Err(CliError::user(format!(
+                "schtasks delete exited {status} (task may not exist)"
+            )));
+        }
+        println!("removed logon task: PulseService");
+        Ok(())
+    }
+}
+
+fn resolve_service_exe() -> Result<PathBuf, CliError> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(if cfg!(windows) {
+                "pulse-service.exe"
+            } else {
+                "pulse-service"
+            });
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+    // Fall back to PATH resolution via where/which is hard; require sibling binary.
+    Err(CliError::user(
+        "could not find pulse-service next to pulse.exe; build both into the same folder",
+    ))
 }
 
 fn service_command() -> Command {

@@ -12,8 +12,8 @@ use pulse_core::ipc::pipe::{self, current_pid};
 use pulse_core::ipc::pid::{remove_pid_file_if_matches, write_pid_file, ServicePidFile};
 use pulse_core::ipc::rpc::{RpcCode, RpcErrorObject, RpcHandler};
 use pulse_core::{
-    apply_checkin_answer, load_config, open_db, parse_answer_input, write_config, Config, NewTask,
-    PulseError, PulsePaths, Store, TaskStatus, TaskUpdate,
+    apply_checkin_answer, export_history, load_config, open_db, parse_answer_input, write_config,
+    Config, ExportFormat, NewTask, PulseError, PulsePaths, Store, TaskStatus, TaskUpdate,
 };
 use pulse_llm::llm_status;
 use pulse_service::pipeline;
@@ -295,6 +295,32 @@ impl RpcHandler for ServiceState {
                     .answer_checkin(checkin.id, &answer.to_string())
                     .map_err(map_store_err)?;
                 Ok(json!({ "ok": true, "checkin": answered, "task": task }))
+            }
+            "export.history" => {
+                let format = params
+                    .get("format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("json");
+                let fmt = ExportFormat::parse(format).ok_or_else(|| {
+                    RpcErrorObject::new(RpcCode::InvalidParams, "format must be json or md")
+                })?;
+                let from = params.get("from").and_then(|v| v.as_str());
+                let to = params.get("to").and_then(|v| v.as_str());
+                let out = params
+                    .get("out")
+                    .and_then(|v| v.as_str())
+                    .map(std::path::PathBuf::from);
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let path = export_history(
+                    &store,
+                    &self.paths,
+                    fmt,
+                    from,
+                    to,
+                    out.as_deref(),
+                )
+                .map_err(map_store_err)?;
+                Ok(json!({ "path": path }))
             }
             "tasks.list" => {
                 let status = parse_status_filter(&params)?;

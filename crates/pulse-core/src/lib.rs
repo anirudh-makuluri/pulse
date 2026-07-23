@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod dedup;
 pub mod error;
+pub mod export;
 pub mod ipc;
 pub mod models;
 pub mod paths;
@@ -18,6 +19,7 @@ pub use config::{
 pub use db::{open as open_db, open_in_memory, LATEST_SCHEMA_VERSION};
 pub use dedup::{compute_dedup_key, normalize_title};
 pub use error::{PulseError, Result};
+pub use export::{export_history, ExportFormat};
 pub use ipc::{
     live_service_pid, try_connect, write_pid_file, IpcClient, RpcHandler, ServicePidFile,
 };

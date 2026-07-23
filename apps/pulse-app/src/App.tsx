@@ -1,17 +1,39 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   createTask,
+  exportHistory,
+  generateSummary,
+  getSettings,
+  getSummary,
   getTask,
   listTasks,
   markDone,
+  privacyAcknowledge,
   serviceInfo,
+  setSourceEnabled,
   setTaskStatus,
+  type SettingsSnapshot,
 } from "./api";
 import type { Task, TaskDetail, TaskStatus } from "./types";
 
-type View = "Inbox" | "Today" | "Next" | "Waiting" | "Done" | "All";
+type View =
+  | "Inbox"
+  | "Today"
+  | "Next"
+  | "Waiting"
+  | "Done"
+  | "All"
+  | "Summary"
+  | "Settings";
 
-const VIEWS: View[] = ["Inbox", "Today", "Next", "Waiting", "Done", "All"];
+const TASK_VIEWS: Array<Exclude<View, "Summary" | "Settings">> = [
+  "Inbox",
+  "Today",
+  "Next",
+  "Waiting",
+  "Done",
+  "All",
+];
 
 function shortId(id: string): string {
   return id.slice(0, 8);
@@ -33,13 +55,18 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState("…");
   const [loading, setLoading] = useState(false);
+  const [settings, setSettings] = useState<SettingsSnapshot | null>(null);
+  const [summaryText, setSummaryText] = useState<string>("(loading…)");
+  const [exportPath, setExportPath] = useState<string | null>(null);
 
+  const isTaskView = TASK_VIEWS.includes(view as (typeof TASK_VIEWS)[number]);
   const statusFilter = useMemo(
-    () => (view === "All" ? undefined : (view as TaskStatus)),
-    [view],
+    () => (view === "All" || !isTaskView ? undefined : (view as TaskStatus)),
+    [view, isTaskView],
   );
 
-  const refresh = useCallback(async () => {
+  const refreshTasks = useCallback(async () => {
+    if (!isTaskView) return;
     setLoading(true);
     setError(null);
     try {
@@ -58,17 +85,44 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [selectedId, statusFilter]);
+  }, [isTaskView, selectedId, statusFilter]);
+
+  const refreshSettings = useCallback(async () => {
+    try {
+      const s = await getSettings();
+      setSettings(s);
+      setInfo(s.service_line);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  const refreshSummary = useCallback(async () => {
+    try {
+      const text = await getSummary();
+      setSummaryText(text || "(no summary for today yet)");
+    } catch (e) {
+      setSummaryText(String(e));
+    }
+  }, []);
 
   useEffect(() => {
-    void refresh();
-    const id = window.setInterval(() => void refresh(), 4000);
-    return () => window.clearInterval(id);
-  }, [refresh]);
+    if (isTaskView) {
+      void refreshTasks();
+      const id = window.setInterval(() => void refreshTasks(), 4000);
+      return () => window.clearInterval(id);
+    }
+    if (view === "Settings") {
+      void refreshSettings();
+    }
+    if (view === "Summary") {
+      void refreshSummary();
+    }
+  }, [view, isTaskView, refreshTasks, refreshSettings, refreshSummary]);
 
   useEffect(() => {
-    if (!selectedId) {
-      setDetail(null);
+    if (!selectedId || !isTaskView) {
+      if (!isTaskView) setDetail(null);
       return;
     }
     let cancelled = false;
@@ -82,7 +136,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [selectedId, isTaskView]);
 
   async function onAdd(e: FormEvent) {
     e.preventDefault();
@@ -92,7 +146,7 @@ export default function App() {
       const task = await createTask(t, view === "Today");
       setTitle("");
       setSelectedId(task.id);
-      await refresh();
+      await refreshTasks();
     } catch (err) {
       setError(String(err));
     }
@@ -102,9 +156,8 @@ export default function App() {
     if (!selectedId) return;
     try {
       await setTaskStatus(selectedId, status);
-      await refresh();
-      const d = await getTask(selectedId);
-      setDetail(d);
+      await refreshTasks();
+      setDetail(await getTask(selectedId));
     } catch (err) {
       setError(String(err));
     }
@@ -114,9 +167,8 @@ export default function App() {
     if (!selectedId) return;
     try {
       await markDone(selectedId);
-      await refresh();
-      const d = await getTask(selectedId);
-      setDetail(d);
+      await refreshTasks();
+      setDetail(await getTask(selectedId));
     } catch (err) {
       setError(String(err));
     }
@@ -129,7 +181,7 @@ export default function App() {
           Pulse <span>·</span>
         </div>
         <nav className="nav">
-          {VIEWS.map((v) => (
+          {TASK_VIEWS.map((v) => (
             <button
               key={v}
               className={view === v ? "active" : ""}
@@ -138,67 +190,232 @@ export default function App() {
               {v}
             </button>
           ))}
+          <button
+            className={view === "Summary" ? "active" : ""}
+            onClick={() => setView("Summary")}
+          >
+            Summary
+          </button>
+          <button
+            className={view === "Settings" ? "active" : ""}
+            onClick={() => setView("Settings")}
+          >
+            Settings
+          </button>
         </nav>
         <div className="meta">
           <div>{loading ? "Refreshing…" : "Live"}</div>
           <div>{info}</div>
-          <div>Poll every 4s</div>
         </div>
       </aside>
 
       <main className="main">
-        <form className="toolbar" onSubmit={onAdd}>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder={
-              view === "Today"
-                ? "Add a task for today…"
-                : "Capture a task…"
-            }
-          />
-          <button type="submit" className="primary">
-            Add
-          </button>
-          <button type="button" onClick={() => void refresh()}>
-            Refresh
-          </button>
-        </form>
-
-        {error ? <div className="error">{error}</div> : null}
-
-        <div className="list">
-          {tasks.length === 0 ? (
-            <div className="empty-list">No tasks in {view}.</div>
-          ) : (
-            tasks.map((t) => (
-              <button
-                key={t.id}
-                className={`task ${selectedId === t.id ? "selected" : ""}`}
-                onClick={() => setSelectedId(t.id)}
-              >
-                <div className="task-title">{t.title}</div>
-                <div className="task-meta">
-                  <span className="pill">{shortId(t.id)}</span>
-                  <span className="pill">{t.status}</span>
-                  <span className={`pill ${sourceClass(t.source)}`}>
-                    {t.source}
-                  </span>
-                  {t.project ? <span className="pill">{t.project}</span> : null}
-                  {t.confidence != null ? (
-                    <span className="pill">
-                      conf {(t.confidence * 100).toFixed(0)}%
-                    </span>
-                  ) : null}
-                </div>
+        {isTaskView ? (
+          <>
+            <form className="toolbar" onSubmit={onAdd}>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={
+                  view === "Today"
+                    ? "Add a task for today…"
+                    : "Capture a task…"
+                }
+              />
+              <button type="submit" className="primary">
+                Add
               </button>
-            ))
-          )}
-        </div>
+              <button type="button" onClick={() => void refreshTasks()}>
+                Refresh
+              </button>
+            </form>
+
+            {error ? <div className="error">{error}</div> : null}
+
+            <div className="list">
+              {tasks.length === 0 ? (
+                <div className="empty-list">No tasks in {view}.</div>
+              ) : (
+                tasks.map((t) => (
+                  <button
+                    key={t.id}
+                    className={`task ${selectedId === t.id ? "selected" : ""}`}
+                    onClick={() => setSelectedId(t.id)}
+                  >
+                    <div className="task-title">{t.title}</div>
+                    <div className="task-meta">
+                      <span className="pill">{shortId(t.id)}</span>
+                      <span className="pill">{t.status}</span>
+                      <span className={`pill ${sourceClass(t.source)}`}>
+                        {t.source}
+                      </span>
+                      {t.project ? (
+                        <span className="pill">{t.project}</span>
+                      ) : null}
+                      {t.confidence != null ? (
+                        <span className="pill">
+                          conf {(t.confidence * 100).toFixed(0)}%
+                        </span>
+                      ) : null}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </>
+        ) : null}
+
+        {view === "Summary" ? (
+          <div className="panel-page">
+            <div className="toolbar">
+              <strong>Today’s summary</strong>
+              <button
+                type="button"
+                className="primary"
+                onClick={() =>
+                  void generateSummary()
+                    .then(setSummaryText)
+                    .catch((e) => setError(String(e)))
+                }
+              >
+                Generate
+              </button>
+              <button type="button" onClick={() => void refreshSummary()}>
+                Reload
+              </button>
+            </div>
+            {error ? <div className="error">{error}</div> : null}
+            <pre className="panel-body">{summaryText}</pre>
+          </div>
+        ) : null}
+
+        {view === "Settings" ? (
+          <div className="panel-page">
+            <div className="toolbar">
+              <strong>Settings</strong>
+              <button type="button" onClick={() => void refreshSettings()}>
+                Refresh
+              </button>
+            </div>
+            {error ? <div className="error">{error}</div> : null}
+            {!settings ? (
+              <div className="empty-list">Loading settings…</div>
+            ) : (
+              <div className="settings">
+                <section>
+                  <h3>Sources</h3>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.claude_enabled}
+                      onChange={(e) =>
+                        void setSourceEnabled("claude", e.target.checked)
+                          .then(refreshSettings)
+                          .catch((err) => setError(String(err)))
+                      }
+                    />
+                    Claude session tracking
+                  </label>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.codex_enabled}
+                      onChange={(e) =>
+                        void setSourceEnabled("codex", e.target.checked)
+                          .then(refreshSettings)
+                          .catch((err) => setError(String(err)))
+                      }
+                    />
+                    Codex session tracking
+                  </label>
+                </section>
+
+                <section>
+                  <h3>Privacy / LLM</h3>
+                  <p className="muted">
+                    Backend: <code>{settings.llm_backend}</code>
+                    {settings.llm_path ? (
+                      <>
+                        {" "}
+                        · <code>{settings.llm_path}</code>
+                      </>
+                    ) : null}
+                  </p>
+                  <p className="muted">{settings.llm_reason}</p>
+                  <p className="muted">
+                    Privacy ack:{" "}
+                    {settings.privacy_ack ? "yes" : "no (heuristic only)"}
+                  </p>
+                  {!settings.privacy_ack ? (
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() =>
+                        void privacyAcknowledge()
+                          .then(refreshSettings)
+                          .catch((err) => setError(String(err)))
+                      }
+                    >
+                      Acknowledge remote LLM risk
+                    </button>
+                  ) : null}
+                </section>
+
+                <section>
+                  <h3>Export</h3>
+                  <div className="task-actions">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void exportHistory("json")
+                          .then((p) => setExportPath(p))
+                          .catch((err) => setError(String(err)))
+                      }
+                    >
+                      Export JSON
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void exportHistory("md")
+                          .then((p) => setExportPath(p))
+                          .catch((err) => setError(String(err)))
+                      }
+                    >
+                      Export Markdown
+                    </button>
+                  </div>
+                  {exportPath ? (
+                    <p className="muted">
+                      Wrote: <code>{exportPath}</code>
+                    </p>
+                  ) : null}
+                </section>
+
+                <section>
+                  <h3>Paths</h3>
+                  <p className="muted">
+                    Data: <code>{settings.data_dir}</code>
+                  </p>
+                  <p className="muted">
+                    Config: <code>{settings.config_path}</code>
+                  </p>
+                  <p className="muted">{settings.service_line}</p>
+                </section>
+              </div>
+            )}
+          </div>
+        ) : null}
       </main>
 
       <aside className="detail">
-        {!detail ? (
+        {!isTaskView ? (
+          <div className="empty">
+            {view === "Summary"
+              ? "Generate a clean end-of-day recap from your task list."
+              : "Toggle sources, privacy, and export history."}
+          </div>
+        ) : !detail ? (
           <div className="empty">Select a task to see detail and evidence.</div>
         ) : (
           <>
