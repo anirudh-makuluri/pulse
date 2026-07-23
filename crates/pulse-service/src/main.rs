@@ -12,9 +12,10 @@ use pulse_core::ipc::pipe::{self, current_pid};
 use pulse_core::ipc::pid::{remove_pid_file_if_matches, write_pid_file, ServicePidFile};
 use pulse_core::ipc::rpc::{RpcCode, RpcErrorObject, RpcHandler};
 use pulse_core::{
-    load_config, open_db, write_config, Config, NewTask, PulseError, PulsePaths, Store, TaskStatus,
-    TaskUpdate,
+    apply_checkin_answer, load_config, open_db, parse_answer_input, write_config, Config, NewTask,
+    PulseError, PulsePaths, Store, TaskStatus, TaskUpdate,
 };
+use pulse_llm::llm_status;
 use pulse_service::pipeline;
 use serde_json::{json, Value};
 
@@ -127,6 +128,7 @@ impl RpcHandler for ServiceState {
             })),
             "service.status" => {
                 let cfg = self.config.lock().map_err(|_| internal("config lock"))?;
+                let st = llm_status(&cfg.llm, &cfg.privacy);
                 Ok(json!({
                     "ok": true,
                     "version": env!("CARGO_PKG_VERSION"),
@@ -134,7 +136,10 @@ impl RpcHandler for ServiceState {
                     "pipe_name": cfg.service.pipe_name,
                     "started_at": self.started_at.to_rfc3339(),
                     "data_dir": self.paths.root,
-                    "llm_mode": "heuristic",
+                    "llm_mode": st.backend_id,
+                    "llm_path": st.path,
+                    "llm_reason": st.reason,
+                    "privacy_ack": st.privacy_ack,
                     "queue_depth": 0,
                     "sources": {
                         "claude": cfg.sources.claude.enabled,
@@ -206,7 +211,6 @@ impl RpcHandler for ServiceState {
                 Ok(json!({ "ok": true, "id": id, "enabled": enabled }))
             }
             "inference.run_once" => {
-                // Manual trigger for testing / CLI
                 let cfg = self.config.lock().map_err(|_| internal("config lock"))?.clone();
                 let mut store = self.store.lock().map_err(|_| internal("store lock"))?;
                 let mut last = std::collections::HashMap::new();
@@ -214,6 +218,83 @@ impl RpcHandler for ServiceState {
                 let n = pipeline::run_once(&mut store, &cfg, &mut last, &mut hour)
                     .map_err(|e| RpcErrorObject::new(RpcCode::InternalError, e))?;
                 Ok(json!({ "ok": true, "created": n }))
+            }
+            "privacy.acknowledge" => {
+                let mut cfg = self.config.lock().map_err(|_| internal("config lock"))?;
+                cfg.privacy.acknowledge_remote_llm = true;
+                write_config(&self.paths.config_path(), &cfg).map_err(|e| {
+                    RpcErrorObject::new(RpcCode::ConfigError, e.to_string())
+                })?;
+                Ok(json!({ "ok": true, "acknowledge_remote_llm": true }))
+            }
+            "llm.status" => {
+                let cfg = self.config.lock().map_err(|_| internal("config lock"))?;
+                let st = llm_status(&cfg.llm, &cfg.privacy);
+                Ok(json!({
+                    "backend_id": st.backend_id,
+                    "path": st.path,
+                    "privacy_ack": st.privacy_ack,
+                    "provider_setting": st.provider_setting,
+                    "reason": st.reason,
+                    "preference": cfg.llm.preference,
+                }))
+            }
+            "summary.generate" => {
+                let day = params
+                    .get("date")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+                let cfg = self.config.lock().map_err(|_| internal("config lock"))?.clone();
+                let mut store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let text = pipeline::generate_summary(&mut store, &cfg, &day)
+                    .map_err(|e| RpcErrorObject::new(RpcCode::InternalError, e))?;
+                let summary = store
+                    .get_summary(&day)
+                    .map_err(map_store_err)?
+                    .ok_or_else(|| {
+                        RpcErrorObject::new(RpcCode::InternalError, "summary missing")
+                    })?;
+                Ok(json!({ "summary": summary, "text": text }))
+            }
+            "summary.get" => {
+                let day = param_str(&params, "date")?;
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let summary = store.get_summary(&day).map_err(map_store_err)?;
+                Ok(json!({ "summary": summary }))
+            }
+            "checkin.list" => {
+                let open_only = params
+                    .get("open_only")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let items = store.list_checkins(open_only).map_err(map_store_err)?;
+                Ok(json!({ "items": items }))
+            }
+            "checkin.answer" => {
+                let id = param_str(&params, "id")?;
+                let answer = params.get("answer").cloned().ok_or_else(|| {
+                    RpcErrorObject::new(RpcCode::InvalidParams, "missing answer")
+                })?;
+                // Allow string answers via JSON string
+                let answer = if let Some(s) = answer.as_str() {
+                    parse_answer_input(s).map_err(map_store_err)?
+                } else {
+                    answer
+                };
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let checkin = store.resolve_checkin(&id).map_err(map_store_err)?;
+                let patch = apply_checkin_answer(checkin.kind, &answer).map_err(map_store_err)?;
+                let task = if let Some(tid) = checkin.task_id {
+                    Some(store.update_task(tid, patch).map_err(map_store_err)?)
+                } else {
+                    None
+                };
+                let answered = store
+                    .answer_checkin(checkin.id, &answer.to_string())
+                    .map_err(map_store_err)?;
+                Ok(json!({ "ok": true, "checkin": answered, "task": task }))
             }
             "tasks.list" => {
                 let status = parse_status_filter(&params)?;

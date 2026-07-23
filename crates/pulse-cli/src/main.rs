@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand, ValueEnum};
 use pulse_core::ipc::pid::{live_service_pid, process_is_live, read_pid_file};
 use pulse_core::{
-    load_config, open_db, try_connect, write_config, IpcClient, NewTask, PulseError, PulsePaths,
-    Store, Task, TaskStatus, TaskUpdate,
+    apply_checkin_answer, load_config, open_db, parse_answer_input, try_connect, write_config,
+    IpcClient, NewTask, PulseError, PulsePaths, Store, Task, TaskStatus, TaskUpdate,
 };
+use pulse_llm::{llm_status, probe_preference};
 
 /// Exit codes: 0 ok, 1 user/logic, 2 service unreachable, 3 DB.
 const EXIT_OK: u8 = 0;
@@ -50,6 +51,26 @@ enum Commands {
     Sources {
         #[command(subcommand)]
         command: SourcesCmd,
+    },
+    /// Privacy settings (remote LLM ack)
+    Privacy {
+        #[command(subcommand)]
+        command: PrivacyCmd,
+    },
+    /// LLM backend status
+    Llm {
+        #[command(subcommand)]
+        command: LlmCmd,
+    },
+    /// Daily summaries
+    Summary {
+        #[command(subcommand)]
+        command: SummaryCmd,
+    },
+    /// Check-ins
+    Checkin {
+        #[command(subcommand)]
+        command: CheckinCmd,
     },
     Version,
 }
@@ -131,6 +152,47 @@ enum SourcesCmd {
     },
     /// Trigger one inference scan now (service must be running)
     Scan,
+}
+
+#[derive(Subcommand, Debug)]
+enum PrivacyCmd {
+    /// Acknowledge residual risk of sending redacted excerpts via agent CLIs
+    Acknowledge,
+}
+
+#[derive(Subcommand, Debug)]
+enum LlmCmd {
+    /// Show resolved backend (heuristic vs grok/claude/codex)
+    Status,
+}
+
+#[derive(Subcommand, Debug)]
+enum SummaryCmd {
+    /// Generate (or refresh) a daily summary
+    Generate {
+        #[arg(long)]
+        date: Option<String>,
+    },
+    /// Show stored summary for a day
+    Show {
+        #[arg(long)]
+        date: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum CheckinCmd {
+    /// List open check-ins
+    List {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Answer a check-in: yes/no or JSON
+    Answer {
+        id: String,
+        /// e.g. yes | no | {"done":true} | {"next_action":"..."}
+        response: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -257,6 +319,22 @@ fn run() -> Result<(), CliError> {
             SourcesCmd::Enable { id } => sources_set(&paths, &id, true),
             SourcesCmd::Disable { id } => sources_set(&paths, &id, false),
             SourcesCmd::Scan => sources_scan(&paths),
+        },
+        Commands::Privacy { command } => match command {
+            PrivacyCmd::Acknowledge => privacy_ack(&paths),
+        },
+        Commands::Llm { command } => match command {
+            LlmCmd::Status => llm_status_cmd(&paths),
+        },
+        Commands::Summary { command } => match command {
+            SummaryCmd::Generate { date } => summary_generate(&paths, date),
+            SummaryCmd::Show { date } => summary_show(&paths, date),
+        },
+        Commands::Checkin { command } => match command {
+            CheckinCmd::List { all } => checkin_list(&paths, !all),
+            CheckinCmd::Answer { id, response } => {
+                checkin_answer(&paths, &id, &response.join(" "))
+            }
         },
         Commands::Tasks { command } => {
             let mut backend = open_backend(&paths, true)?;
@@ -618,6 +696,17 @@ fn sources_set(paths: &PulsePaths, id: &str, enabled: bool) -> Result<(), CliErr
     if id != "claude" && id != "codex" {
         return Err(CliError::user("source id must be 'claude' or 'codex'"));
     }
+    if enabled {
+        let cfg = load_config(&paths.config_path())?;
+        if !cfg.privacy.acknowledge_remote_llm {
+            eprintln!(
+                "Note: remote LLM is not acknowledged — inference stays heuristic until `pulse privacy acknowledge`."
+            );
+            eprintln!(
+                "Agent CLIs may send redacted session excerpts to their providers once acknowledged."
+            );
+        }
+    }
     // Prefer IPC so running service reloads atomically via sources.set_enabled
     if let Ok(mut c) = try_connect_from_paths(paths) {
         c.sources_set_enabled(&id, enabled)?;
@@ -638,6 +727,154 @@ fn sources_set(paths: &PulsePaths, id: &str, enabled: bool) -> Result<(), CliErr
         "source {id} {} (service not running; will apply on next start)",
         if enabled { "enabled" } else { "disabled" }
     );
+    Ok(())
+}
+
+fn privacy_ack(paths: &PulsePaths) -> Result<(), CliError> {
+    eprintln!(
+        "Pulse may call your installed agent CLI with redacted session excerpts (data can leave this machine via that CLI's provider)."
+    );
+    if let Ok(mut c) = try_connect_from_paths(paths) {
+        c.call_raw("privacy.acknowledge", serde_json::json!({}))?;
+        println!("acknowledged (service reloaded config)");
+        return Ok(());
+    }
+    let mut cfg = load_config(&paths.config_path())?;
+    cfg.privacy.acknowledge_remote_llm = true;
+    write_config(&paths.config_path(), &cfg)?;
+    println!("acknowledged (written to config.toml)");
+    Ok(())
+}
+
+fn llm_status_cmd(paths: &PulsePaths) -> Result<(), CliError> {
+    if let Ok(mut c) = try_connect_from_paths(paths) {
+        let v = c.call_raw("llm.status", serde_json::json!({}))?;
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        return Ok(());
+    }
+    let cfg = load_config(&paths.config_path())?;
+    let st = llm_status(&cfg.llm, &cfg.privacy);
+    let pref = probe_preference(&cfg.llm);
+    println!("backend:   {}", st.backend_id);
+    println!("path:      {}", st.path.as_deref().unwrap_or("(none)"));
+    println!("privacy:   ack={}", st.privacy_ack);
+    println!("provider:  {}", st.provider_setting);
+    println!("reason:    {}", st.reason);
+    println!("preference probes:");
+    for (name, path) in pref {
+        println!("  {name}: {}", path.unwrap_or_else(|| "(not found)".into()));
+    }
+    Ok(())
+}
+
+fn summary_generate(paths: &PulsePaths, date: Option<String>) -> Result<(), CliError> {
+    let day = date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+    if let Ok(mut c) = try_connect_from_paths(paths) {
+        let v = c.call_raw(
+            "summary.generate",
+            serde_json::json!({ "date": day }),
+        )?;
+        if let Some(t) = v.get("text").and_then(|x| x.as_str()) {
+            println!("{t}");
+        } else {
+            println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        }
+        return Ok(());
+    }
+    // Offline: open store + generate via pipeline helper needs service crate — do heuristic in-process
+    use pulse_llm::{resolve_llm_client, SummaryRequest};
+    let cfg = load_config(&paths.config_path())?;
+    let conn = open_db(&paths.db_path())?;
+    let store = Store::new(conn);
+    let tasks = store.list_tasks(None)?;
+    let lines: Vec<String> = tasks
+        .iter()
+        .map(|t| format!("[{}] {}", t.status, t.title))
+        .collect();
+    let client = resolve_llm_client(&cfg.llm, &cfg.privacy);
+    let out = client
+        .summarize_day(&SummaryRequest {
+            day: day.clone(),
+            task_lines: lines,
+            activity_notes: None,
+        })
+        .map_err(|e| CliError::user(e.to_string()))?;
+    let offset = chrono::Local::now().offset().local_minus_utc() / 60;
+    let highlights = serde_json::to_string(&out.highlights).unwrap_or_else(|_| "[]".into());
+    store.upsert_summary(&day, offset, &out.text, &highlights, "[]")?;
+    println!("{}", out.text);
+    Ok(())
+}
+
+fn summary_show(paths: &PulsePaths, date: Option<String>) -> Result<(), CliError> {
+    let day = date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+    if let Ok(mut c) = try_connect_from_paths(paths) {
+        let v = c.call_raw("summary.get", serde_json::json!({ "date": day }))?;
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        return Ok(());
+    }
+    let conn = open_db(&paths.db_path())?;
+    let store = Store::new(conn);
+    match store.get_summary(&day)? {
+        Some(s) => {
+            println!("day: {}", s.day);
+            println!("{}", s.text);
+        }
+        None => println!("(no summary for {day})"),
+    }
+    Ok(())
+}
+
+fn checkin_list(paths: &PulsePaths, open_only: bool) -> Result<(), CliError> {
+    if let Ok(mut c) = try_connect_from_paths(paths) {
+        let v = c.call_raw(
+            "checkin.list",
+            serde_json::json!({ "open_only": open_only }),
+        )?;
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        return Ok(());
+    }
+    let conn = open_db(&paths.db_path())?;
+    let store = Store::new(conn);
+    let items = store.list_checkins(open_only)?;
+    if items.is_empty() {
+        println!("(no check-ins)");
+        return Ok(());
+    }
+    for c in items {
+        println!(
+            "{}  [{}]  {}  task={}",
+            &c.id.to_string()[..8],
+            c.kind.as_str(),
+            c.question,
+            c.task_id
+                .map(|t| t.to_string()[..8].to_string())
+                .unwrap_or_else(|| "-".into())
+        );
+    }
+    Ok(())
+}
+
+fn checkin_answer(paths: &PulsePaths, id: &str, response: &str) -> Result<(), CliError> {
+    let answer = parse_answer_input(response)?;
+    if let Ok(mut c) = try_connect_from_paths(paths) {
+        let v = c.call_raw(
+            "checkin.answer",
+            serde_json::json!({ "id": id, "answer": answer }),
+        )?;
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        return Ok(());
+    }
+    let conn = open_db(&paths.db_path())?;
+    let store = Store::new(conn);
+    let checkin = store.resolve_checkin(id)?;
+    let patch = apply_checkin_answer(checkin.kind, &answer)?;
+    if let Some(tid) = checkin.task_id {
+        let t = store.update_task(tid, patch)?;
+        println!("task {} -> {}", &t.id.to_string()[..8], t.status);
+    }
+    store.answer_checkin(checkin.id, &answer.to_string())?;
+    println!("check-in answered");
     Ok(())
 }
 

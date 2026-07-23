@@ -1,6 +1,8 @@
 //! Local heuristic task extraction (no network, no agent CLI).
 
-use crate::types::{InferRequest, LlmClient, LlmError, Result, TaskCandidateOut};
+use crate::types::{
+    InferRequest, LlmClient, LlmError, Result, SummaryOut, SummaryRequest, TaskCandidateOut,
+};
 
 pub struct HeuristicClient {
     pub max_confidence: f64,
@@ -40,6 +42,7 @@ impl LlmClient for HeuristicClient {
                     suggested_next_action: None,
                     proposed_status: Some("Inbox".into()),
                     evidence_snippet: Some(snippet),
+                    match_task_id: None,
                 });
             }
         }
@@ -56,11 +59,34 @@ impl LlmClient for HeuristicClient {
                     evidence_snippet: Some(
                         req.candidate_text.chars().take(200).collect(),
                     ),
+                    match_task_id: None,
                 });
             }
         }
 
         Ok(out)
+    }
+
+    fn summarize_day(&self, req: &SummaryRequest) -> Result<SummaryOut> {
+        let mut highlights = Vec::new();
+        for line in req.task_lines.iter().take(8) {
+            highlights.push(line.clone());
+        }
+        let text = if req.task_lines.is_empty() {
+            format!("# {} summary\n\nNo tasks recorded for this day.", req.day)
+        } else {
+            format!(
+                "# {} summary\n\n{} task line(s).\n\n{}",
+                req.day,
+                req.task_lines.len(),
+                req.task_lines
+                    .iter()
+                    .map(|l| format!("- {l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+        Ok(SummaryOut { text, highlights })
     }
 }
 

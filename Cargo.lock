@@ -520,8 +520,10 @@ dependencies = [
 name = "pulse-cli"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "pulse-core",
+ "pulse-llm",
  "serde_json",
  "tempfile",
  "uuid",
@@ -552,6 +554,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
 ]
 

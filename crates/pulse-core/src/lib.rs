@@ -1,5 +1,6 @@
 //! Pulse core: domain models, SQLite store, config, paths, IPC, and task state machine.
 
+pub mod checkin;
 pub mod config;
 pub mod db;
 pub mod dedup;
@@ -10,6 +11,7 @@ pub mod paths;
 pub mod state;
 pub mod store;
 
+pub use checkin::{apply_checkin_answer, parse_answer_input};
 pub use config::{
     load as load_config, parse_str as parse_config_str, write_atomic as write_config, Config,
 };

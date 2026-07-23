@@ -1,4 +1,4 @@
-//! Inference pipeline: discover → extract → heuristic → Inbox tasks + evidence.
+//! Inference pipeline: discover → extract → LLM/heuristic → Inbox + evidence + check-ins.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -6,12 +6,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
+use chrono::{Local, Timelike, Utc};
 use pulse_core::{
-    compute_dedup_key, Config, NewEvidence, NewTask, SourceWatermark, Store, TaskSource,
-    TaskStatus,
+    compute_dedup_key, Config, NewCheckIn, NewEvidence, NewTask, SourceWatermark, Store,
+    TaskSource, TaskStatus, TaskUpdate, CheckInKind,
 };
-use pulse_llm::{redact_for_remote, HeuristicClient, InferRequest, LlmClient};
+use pulse_llm::{
+    redact_for_remote, resolve_llm_client, HeuristicClient, InferRequest, LlmClient, SummaryRequest,
+};
 use pulse_sources::{ClaudeSource, CodexSource, DiscoveredArtifact, SourceAdapter, SourceId};
 
 pub struct PipelineHandle {
@@ -28,7 +30,7 @@ impl PipelineHandle {
     }
 }
 
-/// Start a background poll loop (every `poll_secs`) that runs inference when sources enabled.
+/// Start poll loop + optional end-of-day summary at local 23:55.
 pub fn start_pipeline(
     store: Arc<Mutex<Store>>,
     config: Arc<Mutex<Config>>,
@@ -37,10 +39,10 @@ pub fn start_pipeline(
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = Arc::clone(&stop);
     let join = thread::spawn(move || {
-        // Per-path debounce timestamps
         let mut last_seen: HashMap<String, Instant> = HashMap::new();
         let mut hour_inserts: u32 = 0;
         let mut hour_start = Instant::now();
+        let mut last_summary_day = String::new();
 
         while !stop2.load(Ordering::SeqCst) {
             let cfg = match config.lock() {
@@ -55,16 +57,11 @@ pub fn start_pipeline(
                 }
 
                 if let Ok(mut store) = store.lock() {
-                    let _ = run_once(
-                        &mut store,
-                        &cfg,
-                        &mut last_seen,
-                        &mut hour_inserts,
-                    );
+                    let _ = run_once(&mut store, &cfg, &mut last_seen, &mut hour_inserts);
+                    maybe_auto_summary(&mut store, &cfg, &mut last_summary_day);
                 }
             }
 
-            // Sleep in slices so stop is responsive
             let slice = Duration::from_millis(200);
             let total = Duration::from_secs(poll_secs.max(5));
             let mut waited = Duration::ZERO;
@@ -81,7 +78,60 @@ pub fn start_pipeline(
     }
 }
 
-/// Single scan/process pass (also used by tests / manual trigger).
+fn maybe_auto_summary(store: &mut Store, cfg: &Config, last_day: &mut String) {
+    let now = Local::now();
+    let day = now.format("%Y-%m-%d").to_string();
+    // Once at/after 23:55 local, if no row for day.
+    if now.time().hour() < 23 || now.time().minute() < 55 {
+        return;
+    }
+    if *last_day == day {
+        return;
+    }
+    if store.get_summary(&day).ok().flatten().is_some() {
+        *last_day = day;
+        return;
+    }
+    if generate_summary(store, cfg, &day).is_ok() {
+        *last_day = day;
+    }
+}
+
+/// Generate (or replace) daily summary for `day` (YYYY-MM-DD).
+pub fn generate_summary(store: &mut Store, cfg: &Config, day: &str) -> Result<String, String> {
+    let client = resolve_llm_client(&cfg.llm, &cfg.privacy);
+    let tasks = store.list_tasks(None).map_err(|e| e.to_string())?;
+    let lines: Vec<String> = tasks
+        .iter()
+        .filter(|t| {
+            t.updated_at
+                .with_timezone(&Local)
+                .format("%Y-%m-%d")
+                .to_string()
+                == day
+                || t.created_at
+                    .with_timezone(&Local)
+                    .format("%Y-%m-%d")
+                    .to_string()
+                    == day
+        })
+        .map(|t| format!("[{}] {} ({})", t.status, t.title, t.source))
+        .collect();
+
+    let req = SummaryRequest {
+        day: day.to_string(),
+        task_lines: lines,
+        activity_notes: None,
+    };
+    let out = client.summarize_day(&req).map_err(|e| e.to_string())?;
+    let offset = Local::now().offset().local_minus_utc() / 60;
+    let highlights = serde_json::to_string(&out.highlights).unwrap_or_else(|_| "[]".into());
+    let summary = store
+        .upsert_summary(day, offset, &out.text, &highlights, "[]")
+        .map_err(|e| e.to_string())?;
+    Ok(summary.text)
+}
+
 pub fn run_once(
     store: &mut Store,
     cfg: &Config,
@@ -122,12 +172,12 @@ pub fn run_once(
         return Ok(0);
     }
 
-    let heuristic = HeuristicClient::default();
+    let client = resolve_llm_client(&cfg.llm, &cfg.privacy);
+    let is_heuristic = client.backend_id() == "heuristic";
 
     for adapter in adapters {
         let arts = adapter.discover().map_err(|e| e.to_string())?;
         for art in arts {
-            // Debounce: skip if we processed this path very recently without growth
             if let Some(t) = last_seen.get(&art.source_ref) {
                 if t.elapsed() < debounce {
                     continue;
@@ -138,14 +188,11 @@ pub fn run_once(
                 .get_watermark(&art.source_ref)
                 .map_err(|e| e.to_string())?;
             let mut since = wm.as_ref().map(|w| w.byte_offset as u64);
-            // Shrink reset
             if let Some(w) = &wm {
                 if (art.size_bytes as i64) < w.size_bytes {
                     since = Some(0);
                 }
             }
-
-            // Skip if no change in size and offset already at end
             if let Some(w) = &wm {
                 if w.size_bytes == art.size_bytes as i64
                     && w.byte_offset == art.size_bytes as i64
@@ -156,21 +203,19 @@ pub fn run_once(
                 }
             }
 
-            let batch = adapter
-                .extract(&art, since)
-                .map_err(|e| e.to_string())?;
+            let batch = adapter.extract(&art, since).map_err(|e| e.to_string())?;
             last_seen.insert(art.source_ref.clone(), Instant::now());
 
-            // Update watermark even if no text (advanced offset)
-            let wm_new = SourceWatermark {
-                source_ref: art.source_ref.clone(),
-                path: art.path.to_string_lossy().to_string(),
-                size_bytes: batch.size_bytes as i64,
-                mtime_ms: batch.mtime_ms,
-                byte_offset: batch.new_byte_offset as i64,
-                last_processed_at: Utc::now(),
-            };
-            store.upsert_watermark(&wm_new).map_err(|e| e.to_string())?;
+            store
+                .upsert_watermark(&SourceWatermark {
+                    source_ref: art.source_ref.clone(),
+                    path: art.path.to_string_lossy().to_string(),
+                    size_bytes: batch.size_bytes as i64,
+                    mtime_ms: batch.mtime_ms,
+                    byte_offset: batch.new_byte_offset as i64,
+                    last_processed_at: Utc::now(),
+                })
+                .map_err(|e| e.to_string())?;
 
             if batch.candidate_text.trim().is_empty() {
                 continue;
@@ -186,20 +231,72 @@ pub fn run_once(
                 max_candidates: max_cand,
             };
 
-            let candidates = heuristic.infer_tasks(&req).map_err(|e| e.to_string())?;
+            let candidates = match client.infer_tasks(&req) {
+                Ok(c) => c,
+                Err(_) if !is_heuristic => {
+                    // Fallback to heuristic on CLI failure
+                    let h = HeuristicClient::default();
+                    h.infer_tasks(&req).map_err(|e| e.to_string())?
+                }
+                Err(e) => return Err(e.to_string()),
+            };
+
             let source = match adapter.id() {
                 SourceId::Claude => TaskSource::Claude,
                 SourceId::Codex => TaskSource::Codex,
             };
 
             for cand in candidates {
-                if *hour_inserts >= hour_cap {
+                if *hour_inserts >= hour_cap && is_heuristic {
                     break;
                 }
                 let title = cand.title.trim();
                 if title.chars().count() < 12 {
                     continue;
                 }
+
+                let conf = if is_heuristic {
+                    cand.confidence.min(0.45)
+                } else {
+                    cand.confidence.clamp(0.0, 1.0)
+                };
+
+                // Pre-existing: match_task_id or dedup
+                let existing = if let Some(ref mid) = cand.match_task_id {
+                    store.resolve_task(mid).ok()
+                } else {
+                    let dedup = compute_dedup_key(source, &batch.session_id, title);
+                    store
+                        .find_by_dedup_key(&dedup)
+                        .map_err(|e| e.to_string())?
+                };
+
+                if let Some(task) = existing {
+                    apply_update_for_existing(
+                        store,
+                        &task.id.to_string(),
+                        &cand.proposed_status,
+                        conf,
+                        cand.notes.clone(),
+                        cand.suggested_next_action.clone(),
+                        cfg,
+                    )?;
+                    if let Some(sn) = cand.evidence_snippet {
+                        let _ = store.add_evidence(NewEvidence {
+                            task_id: task.id,
+                            kind: "session_snippet".into(),
+                            source_ref: batch.source_ref.clone(),
+                            snippet: Some(redact_for_remote(&sn).text),
+                            metadata_json: Some(
+                                serde_json::json!({"backend": client.backend_id()}).to_string(),
+                            ),
+                            observed_at: Utc::now(),
+                        });
+                    }
+                    continue;
+                }
+
+                // Create always Inbox
                 let dedup = compute_dedup_key(source, &batch.session_id, title);
                 if store
                     .find_by_dedup_key(&dedup)
@@ -209,11 +306,10 @@ pub fn run_once(
                     continue;
                 }
 
-                // Always Inbox on create
                 let mut new = NewTask::manual(title);
                 new.status = TaskStatus::Inbox;
                 new.source = source;
-                new.confidence = Some(cand.confidence.min(0.45));
+                new.confidence = Some(conf);
                 new.project = batch.project.clone();
                 new.notes = cand.notes;
                 new.suggested_next_action = cand.suggested_next_action;
@@ -234,7 +330,7 @@ pub fn run_once(
                         snippet,
                         metadata_json: Some(
                             serde_json::json!({
-                                "backend": heuristic.backend_id(),
+                                "backend": client.backend_id(),
                                 "session_id": batch.session_id,
                             })
                             .to_string(),
@@ -251,7 +347,9 @@ pub fn run_once(
                     Some(task.id),
                 );
 
-                *hour_inserts += 1;
+                if is_heuristic {
+                    *hour_inserts += 1;
+                }
                 created += 1;
             }
         }
@@ -260,16 +358,67 @@ pub fn run_once(
     Ok(created)
 }
 
-/// Test helper: run adapters against explicit roots (not env).
+fn apply_update_for_existing(
+    store: &mut Store,
+    task_id: &str,
+    proposed_status: &Option<String>,
+    conf: f64,
+    notes: Option<String>,
+    next: Option<String>,
+    cfg: &Config,
+) -> Result<(), String> {
+    let task = store.resolve_task(task_id).map_err(|e| e.to_string())?;
+    let mut update = TaskUpdate {
+        notes,
+        suggested_next_action: next,
+        confidence: Some(conf),
+        ..Default::default()
+    };
+
+    if let Some(ps) = proposed_status {
+        if let Some(status) = TaskStatus::parse(ps) {
+            if status == TaskStatus::Done {
+                if conf >= cfg.inference.strong_done_threshold {
+                    update.status = Some(TaskStatus::Done);
+                } else if conf >= cfg.inference.checkin_threshold {
+                    let _ = store.create_checkin(NewCheckIn {
+                        task_id: Some(task.id),
+                        question: format!("Is \"{}\" done?", task.title),
+                        kind: CheckInKind::IsDone,
+                    });
+                }
+            } else if conf >= cfg.inference.auto_status_threshold {
+                update.status = Some(status);
+            } else if conf >= cfg.inference.checkin_threshold {
+                let _ = store.create_checkin(NewCheckIn {
+                    task_id: Some(task.id),
+                    question: format!("Is \"{}\" still active? Suggested: {ps}", task.title),
+                    kind: CheckInKind::StillActive,
+                });
+            }
+        }
+    }
+
+    store
+        .update_task(task.id, update)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Test helper: adapters + forced heuristic (or resolved client if ack).
 pub fn run_once_with_adapters(
     store: &mut Store,
     cfg: &Config,
     adapters: Vec<Box<dyn SourceAdapter>>,
 ) -> Result<u32, String> {
-    let mut hour_inserts = 0u32;
+    let mut last_seen = HashMap::new();
+    // Build a synthetic cfg that only uses given adapters by enabling both
+    // but we process adapters directly:
+    let mut hour = 0u32;
+    let client = resolve_llm_client(&cfg.llm, &cfg.privacy);
+    let is_heuristic = client.backend_id() == "heuristic";
     let max_cand = cfg.inference.max_candidates_per_batch as usize;
     let hour_cap = cfg.inference.heuristic_inbox_inserts_per_hour;
-    let heuristic = HeuristicClient::default();
     let mut created = 0u32;
 
     for adapter in adapters {
@@ -279,11 +428,14 @@ pub fn run_once_with_adapters(
                 store,
                 adapter.as_ref(),
                 &art,
-                &heuristic,
+                client.as_ref(),
+                is_heuristic,
                 max_cand,
                 hour_cap,
-                &mut hour_inserts,
+                &mut hour,
+                cfg,
             )?;
+            let _ = last_seen.insert(art.source_ref.clone(), Instant::now());
         }
     }
     Ok(created)
@@ -293,10 +445,12 @@ fn process_artifact(
     store: &mut Store,
     adapter: &dyn SourceAdapter,
     art: &DiscoveredArtifact,
-    heuristic: &HeuristicClient,
+    client: &dyn LlmClient,
+    is_heuristic: bool,
     max_cand: usize,
     hour_cap: u32,
     hour_inserts: &mut u32,
+    cfg: &Config,
 ) -> Result<u32, String> {
     let wm = store
         .get_watermark(&art.source_ref)
@@ -332,20 +486,25 @@ fn process_artifact(
         candidate_text: redacted.text.clone(),
         max_candidates: max_cand,
     };
-    let candidates = heuristic.infer_tasks(&req).map_err(|e| e.to_string())?;
+    let candidates = client.infer_tasks(&req).map_err(|e| e.to_string())?;
     let source = match adapter.id() {
         SourceId::Claude => TaskSource::Claude,
         SourceId::Codex => TaskSource::Codex,
     };
     let mut created = 0u32;
     for cand in candidates {
-        if *hour_inserts >= hour_cap {
+        if is_heuristic && *hour_inserts >= hour_cap {
             break;
         }
         let title = cand.title.trim();
         if title.chars().count() < 12 {
             continue;
         }
+        let conf = if is_heuristic {
+            cand.confidence.min(0.45)
+        } else {
+            cand.confidence.clamp(0.0, 1.0)
+        };
         let dedup = compute_dedup_key(source, &batch.session_id, title);
         if store
             .find_by_dedup_key(&dedup)
@@ -357,7 +516,7 @@ fn process_artifact(
         let mut new = NewTask::manual(title);
         new.status = TaskStatus::Inbox;
         new.source = source;
-        new.confidence = Some(cand.confidence.min(0.45));
+        new.confidence = Some(conf);
         new.project = batch.project.clone();
         new.notes = cand.notes;
         new.dedup_key = Some(dedup);
@@ -372,12 +531,17 @@ fn process_artifact(
                     .evidence_snippet
                     .map(|s| redact_for_remote(&s).text)
                     .or_else(|| Some(redacted.text.chars().take(200).collect())),
-                metadata_json: None,
+                metadata_json: Some(
+                    serde_json::json!({"backend": client.backend_id()}).to_string(),
+                ),
                 observed_at: Utc::now(),
             })
             .map_err(|e| e.to_string())?;
-        *hour_inserts += 1;
+        if is_heuristic {
+            *hour_inserts += 1;
+        }
         created += 1;
+        let _ = cfg; // thresholds used in run_once path
     }
     Ok(created)
 }

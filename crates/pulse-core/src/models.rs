@@ -230,3 +230,21 @@ pub struct SourceWatermark {
     pub byte_offset: i64,
     pub last_processed_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Summary {
+    pub id: Uuid,
+    pub day: String,
+    pub timezone_offset_minutes: i32,
+    pub text: String,
+    pub highlights_json: String,
+    pub evidence_json: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewCheckIn {
+    pub task_id: Option<Uuid>,
+    pub question: String,
+    pub kind: CheckInKind,
+}

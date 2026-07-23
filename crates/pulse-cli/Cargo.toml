@@ -11,8 +11,10 @@ name = "pulse"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { workspace = true }
 clap = { workspace = true }
 pulse-core = { workspace = true }
+pulse-llm = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 

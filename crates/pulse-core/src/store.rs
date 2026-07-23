@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 use crate::error::{PulseError, Result};
 use crate::models::{
-    Evidence, NewEvidence, NewTask, SourceWatermark, Task, TaskSource, TaskStatus, TaskUpdate,
+    CheckIn, CheckInKind, CheckInStatus, Evidence, NewCheckIn, NewEvidence, NewTask, SourceWatermark,
+    Summary, Task, TaskSource, TaskStatus, TaskUpdate,
 };
 use crate::state::validate_transition;
 
@@ -364,6 +365,190 @@ impl Store {
         Ok(id)
     }
 
+    // --- Summaries ---
+
+    pub fn upsert_summary(
+        &self,
+        day: &str,
+        timezone_offset_minutes: i32,
+        text: &str,
+        highlights_json: &str,
+        evidence_json: &str,
+    ) -> Result<Summary> {
+        let now = Utc::now();
+        if let Some(existing) = self.get_summary(day)? {
+            self.conn.execute(
+                r#"
+                UPDATE summaries SET
+                  timezone_offset_minutes = ?2,
+                  text = ?3,
+                  highlights_json = ?4,
+                  evidence_json = ?5,
+                  created_at = ?6
+                WHERE id = ?1
+                "#,
+                params![
+                    existing.id.to_string(),
+                    timezone_offset_minutes,
+                    text,
+                    highlights_json,
+                    evidence_json,
+                    now.to_rfc3339(),
+                ],
+            )?;
+            return self
+                .get_summary(day)?
+                .ok_or_else(|| PulseError::Validation("summary missing after update".into()));
+        }
+        let id = Uuid::new_v4();
+        self.conn.execute(
+            r#"
+            INSERT INTO summaries
+              (id, day, timezone_offset_minutes, text, highlights_json, evidence_json, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                id.to_string(),
+                day,
+                timezone_offset_minutes,
+                text,
+                highlights_json,
+                evidence_json,
+                now.to_rfc3339(),
+            ],
+        )?;
+        self.get_summary(day)?
+            .ok_or_else(|| PulseError::Validation("summary missing after insert".into()))
+    }
+
+    pub fn get_summary(&self, day: &str) -> Result<Option<Summary>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, day, timezone_offset_minutes, text, highlights_json, evidence_json, created_at
+            FROM summaries WHERE day = ?1
+            "#,
+        )?;
+        let row = stmt
+            .query_row(params![day], |row| {
+                Ok(Summary {
+                    id: parse_uuid(row.get::<_, String>(0)?)?,
+                    day: row.get(1)?,
+                    timezone_offset_minutes: row.get(2)?,
+                    text: row.get(3)?,
+                    highlights_json: row.get(4)?,
+                    evidence_json: row.get(5)?,
+                    created_at: parse_dt(&row.get::<_, String>(6)?)?,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    // --- Check-ins ---
+
+    pub fn create_checkin(&self, new: NewCheckIn) -> Result<CheckIn> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        self.conn.execute(
+            r#"
+            INSERT INTO checkins
+              (id, task_id, question, kind, status, answer_json, created_at, answered_at)
+            VALUES (?1, ?2, ?3, ?4, 'open', NULL, ?5, NULL)
+            "#,
+            params![
+                id.to_string(),
+                new.task_id.map(|t| t.to_string()),
+                new.question,
+                new.kind.as_str(),
+                now.to_rfc3339(),
+            ],
+        )?;
+        self.get_checkin(id)?
+            .ok_or_else(|| PulseError::Validation("checkin missing after insert".into()))
+    }
+
+    pub fn get_checkin(&self, id: Uuid) -> Result<Option<CheckIn>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, task_id, question, kind, status, answer_json, created_at, answered_at
+            FROM checkins WHERE id = ?1
+            "#,
+        )?;
+        let row = stmt
+            .query_row(params![id.to_string()], map_checkin)
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn list_checkins(&self, open_only: bool) -> Result<Vec<CheckIn>> {
+        let mut out = Vec::new();
+        if open_only {
+            let mut stmt = self.conn.prepare(
+                r#"
+                SELECT id, task_id, question, kind, status, answer_json, created_at, answered_at
+                FROM checkins WHERE status = 'open' ORDER BY created_at DESC
+                "#,
+            )?;
+            for row in stmt.query_map([], map_checkin)? {
+                out.push(row?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                r#"
+                SELECT id, task_id, question, kind, status, answer_json, created_at, answered_at
+                FROM checkins ORDER BY created_at DESC
+                "#,
+            )?;
+            for row in stmt.query_map([], map_checkin)? {
+                out.push(row?);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn answer_checkin(&self, id: Uuid, answer_json: &str) -> Result<CheckIn> {
+        let now = Utc::now();
+        let n = self.conn.execute(
+            r#"
+            UPDATE checkins SET status = 'answered', answer_json = ?2, answered_at = ?3
+            WHERE id = ?1 AND status = 'open'
+            "#,
+            params![id.to_string(), answer_json, now.to_rfc3339()],
+        )?;
+        if n == 0 {
+            return Err(PulseError::Validation(format!(
+                "check-in not found or already answered: {id}"
+            )));
+        }
+        self.get_checkin(id)?
+            .ok_or_else(|| PulseError::Validation("checkin missing".into()))
+    }
+
+    pub fn resolve_checkin(&self, id_or_prefix: &str) -> Result<CheckIn> {
+        let raw = id_or_prefix.trim();
+        if let Ok(uuid) = Uuid::parse_str(raw) {
+            return self
+                .get_checkin(uuid)?
+                .ok_or_else(|| PulseError::Validation(format!("check-in not found: {raw}")));
+        }
+        let needle = raw.to_ascii_lowercase();
+        let all = self.list_checkins(false)?;
+        let matches: Vec<_> = all
+            .into_iter()
+            .filter(|c| {
+                c.id.as_hyphenated()
+                    .to_string()
+                    .to_ascii_lowercase()
+                    .starts_with(&needle)
+            })
+            .collect();
+        match matches.len() {
+            0 => Err(PulseError::Validation(format!("check-in not found: {raw}"))),
+            1 => Ok(matches.into_iter().next().unwrap()),
+            _ => Err(PulseError::AmbiguousTaskId(raw.to_string())),
+        }
+    }
+
     /// Resolve a full UUID or unique id prefix to a task.
     pub fn resolve_task(&self, id_or_prefix: &str) -> Result<Task> {
         let raw = id_or_prefix.trim();
@@ -391,6 +576,39 @@ impl Store {
             _ => Err(PulseError::AmbiguousTaskId(raw.to_string())),
         }
     }
+}
+
+fn map_checkin(row: &rusqlite::Row<'_>) -> rusqlite::Result<CheckIn> {
+    let kind_s: String = row.get(3)?;
+    let status_s: String = row.get(4)?;
+    Ok(CheckIn {
+        id: parse_uuid(row.get::<_, String>(0)?)?,
+        task_id: row
+            .get::<_, Option<String>>(1)?
+            .map(parse_uuid)
+            .transpose()?,
+        question: row.get(2)?,
+        kind: CheckInKind::parse(&kind_s).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                format!("bad checkin kind {kind_s}").into(),
+            )
+        })?,
+        status: CheckInStatus::parse(&status_s).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                4,
+                rusqlite::types::Type::Text,
+                format!("bad checkin status {status_s}").into(),
+            )
+        })?,
+        answer_json: row.get(5)?,
+        created_at: parse_dt(&row.get::<_, String>(6)?)?,
+        answered_at: row
+            .get::<_, Option<String>>(7)?
+            .map(|s| parse_dt(&s))
+            .transpose()?,
+    })
 }
 
 fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {

@@ -127,6 +127,11 @@ impl IpcClient {
     pub fn inference_run_once(&mut self) -> Result<Value> {
         call(&mut self.stream, "inference.run_once", json!({}))
     }
+
+    /// Generic RPC for methods not wrapped above.
+    pub fn call_raw(&mut self, method: &str, params: Value) -> Result<Value> {
+        call(&mut self.stream, method, params)
+    }
 }
 
 fn decode_task(result: Value) -> Result<Task> {
