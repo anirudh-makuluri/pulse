@@ -16,6 +16,8 @@ pub struct Config {
     #[serde(default)]
     pub sources: SourcesConfig,
     #[serde(default)]
+    pub sync: SyncConfig,
+    #[serde(default)]
     pub privacy: PrivacyConfig,
 }
 
@@ -26,6 +28,7 @@ impl Default for Config {
             llm: LlmConfig::default(),
             inference: InferenceConfig::default(),
             sources: SourcesConfig::default(),
+            sync: SyncConfig::default(),
             privacy: PrivacyConfig::default(),
         }
     }
@@ -204,6 +207,32 @@ pub struct SourceToggle {
     pub extra_roots: Vec<String>,
 }
 
+/// Optional cloud synchronization. The local SQLite database remains usable
+/// while sync is disabled or the endpoint is unreachable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SyncConfig {
+    /// Explicit opt-in. Disabled by default to preserve local-first behavior.
+    #[serde(default)]
+    pub enabled: bool,
+    /// HTTPS endpoint for the Pulse sync API. Required when sync is enabled.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Optional S3 bucket or equivalent artifact store identifier. This stores
+    /// only explicitly approved large artifacts; it never enables sync itself.
+    #[serde(default)]
+    pub artifact_bucket: Option<String>,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: None,
+            artifact_bucket: None,
+        }
+    }
+}
+
 impl Default for SourceToggle {
     fn default() -> Self {
         Self {
@@ -284,6 +313,29 @@ impl Config {
         if self.service.pipe_name.trim().is_empty() {
             return Err(PulseError::Config("service.pipe_name must not be empty".into()));
         }
+        if self.sync.enabled && self.sync.endpoint.is_none() {
+            return Err(PulseError::Config(
+                "sync.endpoint is required when sync.enabled is true".into(),
+            ));
+        }
+        if let Some(endpoint) = &self.sync.endpoint {
+            let endpoint = endpoint.trim();
+            if !(endpoint.starts_with("https://") || endpoint.starts_with("http://")) {
+                return Err(PulseError::Config(
+                    "sync.endpoint must start with https:// or http://".into(),
+                ));
+            }
+        }
+        if self
+            .sync
+            .artifact_bucket
+            .as_deref()
+            .is_some_and(|bucket| bucket.trim().is_empty())
+        {
+            return Err(PulseError::Config(
+                "sync.artifact_bucket must not be empty when provided".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -352,6 +404,7 @@ mod tests {
         assert_eq!(cfg.llm.provider, "auto");
         assert!(!cfg.privacy.acknowledge_remote_llm);
         assert!(!cfg.sources.claude.enabled);
+        assert!(!cfg.sync.enabled);
     }
 
     #[test]
@@ -403,5 +456,32 @@ log_level = "debug"
         assert_eq!(cfg.service.log_level, "debug");
         assert_eq!(cfg.service.pipe_name, "pulse-service");
         assert_eq!(cfg.inference.debounce_ms, 2000);
+    }
+
+    #[test]
+    fn sync_requires_an_endpoint_when_enabled() {
+        let err = parse_str(
+            r#"
+[sync]
+enabled = true
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("sync.endpoint"));
+    }
+
+    #[test]
+    fn sync_config_accepts_a_local_development_endpoint() {
+        let cfg = parse_str(
+            r#"
+[sync]
+enabled = true
+endpoint = "http://127.0.0.1:3000"
+artifact_bucket = "pulse-artifacts"
+"#,
+        )
+        .unwrap();
+        assert!(cfg.sync.enabled);
+        assert_eq!(cfg.sync.artifact_bucket.as_deref(), Some("pulse-artifacts"));
     }
 }

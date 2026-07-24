@@ -9,21 +9,40 @@
 | **Status** | Ready for Implementation (design review consensus, R3) |
 | **Audience** | Senior engineers implementing the greenfield monorepo |
 | **Related** | Product PRD (session context); no prior RFCs (greenfield) |
-| **Revision** | R4 — LLM via installed agent CLIs (`grok` / `claude` / `codex`) instead of direct xAI HTTP API |
+| **Revision** | R5 — local-first activity memory with opt-in CockroachDB and AWS sync |
 
 ---
 
 ## Overview
 
-**Pulse** is a local-first, cross-platform task app that turns real work activity into an always-current todo list. The MVP promise is: *Pulse keeps your tasks current from real work signals.*
+**Pulse** is a local-first activity and memory layer for human-AI work. Its
+MVP promise is: *a task can continue across agents without the user rebuilding
+context by hand.*
 
-This document specifies the implementable architecture for v0 (Windows-first): a Rust Cargo workspace with a background service (`pulse-service`), CLI (`pulse-cli`), SQLite system of record (`pulse-core`), source adapters for Claude/Codex sessions (`pulse-sources`), and **LLM inference by shelling out to whatever agent CLIs the user already has** (`pulse-llm` discovers `grok`, `claude`, and/or `codex` on `PATH`), plus a later Tauri desktop shell (`pulse-app`).
+This document specifies the original local foundation for v0 (Windows-first): a
+Rust Cargo workspace with a background service (`pulse-service`), CLI
+(`pulse-cli`), SQLite store (`pulse-core`), source adapters for Claude/Codex
+sessions (`pulse-sources`), and **LLM inference by shelling out to whatever
+agent CLIs the user already has** (`pulse-llm` discovers `grok`, `claude`, and/or
+`codex` on `PATH`), plus a Tauri desktop shell (`pulse-app`).
+
+The current extension preserves that local foundation while adding an activity
+graph, checkpoints, reminders, structured agent handoffs, and an explicit
+opt-in cloud sync path. Local SQLite remains immediately usable offline; AWS
+Lambda persists approved records to CockroachDB and S3 stores approved large
+artifacts. Claude, Codex, or another configured local provider performs
+inference and summarization—AWS Bedrock is not required. See
+[activity-model.md](activity-model.md) and
+[implementation-roadmap.md](implementation-roadmap.md) for the authoritative
+extension scope.
 
 **Important split:** Claude/Codex **session files** are *work signals* (sources). Claude/Codex/Grok **CLIs** are *inference engines* (how Pulse asks a model for structured task candidates). Same tools, different roles.
 
 The design prioritizes a task-first UX (Inbox → Today/Next/Waiting/Done), evidence-linked inference, offline-capable reads, no Pulse-managed API keys, secret redaction before any CLI-backed remote call, and untrusted treatment of session transcripts.
 
-No application code exists yet at `D:\own\pulse`. All paths, crates, and APIs below are **proposed** structure for greenfield implementation.
+The local workspace, daemon, CLI, source adapters, agent CLI integration, and
+Tauri shell described below are implemented. New activity-memory and cloud-sync
+work must extend them incrementally rather than rewrite them.
 
 ---
 
@@ -305,6 +324,14 @@ enabled = false
 [sources.codex]
 enabled = false
 
+[sync]
+# Explicit opt-in. The local database and reminders continue to work offline.
+enabled = false
+# Required only when enabled. Use http:// only for local development.
+# endpoint = "https://<lambda-function-url>/sync"
+# Optional archive destination for explicitly approved large artifacts.
+# artifact_bucket = "pulse-artifacts"
+
 [privacy]
 # residual risk: redaction is best-effort; CLI backends still send prompts
 # to the provider behind that CLI (Anthropic / OpenAI / xAI per their auth)
@@ -312,6 +339,10 @@ acknowledge_remote_llm = false   # must be true before first CLI-backed call
 ```
 
 First CLI-backed LLM use requires `acknowledge_remote_llm = true`. Until then, force heuristic-only even if agent CLIs are installed.
+
+`sync.enabled` is separate from the LLM privacy acknowledgement. It queues only
+explicitly approved structured activity records for the future sync client;
+authentication secrets must not be written to `config.toml`.
 
 **How to set ack (normative, available in PR5 — not only PR7):**
 
@@ -1028,7 +1059,10 @@ CREATE TABLE source_watermarks (
 
 ### 3. Cloud-hosted inference + sync backend
 
-**Decision:** Reject. Local-first; no Pulse cloud; inference via **user's already-installed agent CLIs** (or heuristic).
+**Decision:** Reject cloud-hosted inference. Pulse uses the **user's
+already-installed agent CLIs** (or local heuristics) for inference. An opt-in,
+minimal AWS sync backend is accepted for durable CockroachDB memory and approved
+artifact archival; it must never block local task operations or reminders.
 
 ### 4. Custom binary IPC vs JSON-RPC
 

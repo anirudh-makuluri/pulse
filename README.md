@@ -1,10 +1,14 @@
 # Pulse
 
-**The todo app that stays current for you.**
+**Your work, always in context.**
 
-Pulse is a local-first task app that turns real work activity into an always-current todo list. It captures tasks from direct input and work signals (like Claude and Codex sessions), keeps them updated as work happens, and helps you see what to do next.
+Pulse is the local-first activity and memory layer for human-AI work. It keeps
+tasks, agent sessions, decisions, checkpoints, reminders, and handoffs connected
+so work can continue across Claude, Codex, and other tools without rebuilding
+context by hand.
 
-> Pulse is a local-first todo app that captures real work, keeps tasks current, and shows you what to do next.
+> Pulse remembers what you and your agents are doing, lets work continue across
+> applications and agents, and brings it back when it matters.
 
 ## Status
 
@@ -12,7 +16,9 @@ Pulse is a local-first task app that turns real work activity into an always-cur
 
 | Piece | Status |
 |---|---|
-| Design | [docs/design.md](docs/design.md) |
+| Technical design | [docs/design.md](docs/design.md) |
+| Activity model | [docs/activity-model.md](docs/activity-model.md) |
+| Implementation roadmap | [docs/implementation-roadmap.md](docs/implementation-roadmap.md) |
 | `pulse-core` (models, SQLite, config) | Done |
 | `pulse-cli` | Done (IPC when service up; direct DB fallback) |
 | `pulse-service` (background daemon) | Done (named-pipe JSON-RPC + poller) |
@@ -22,22 +28,23 @@ Pulse is a local-first task app that turns real work activity into an always-cur
 
 ## Product principles
 
-- **Task-first** — a todo app, not an analytics dashboard
-- **Local-first** — data lives on your machine by default
-- **Low-friction** — capture and updates should feel light
-- **Trustworthy** — inferred tasks carry evidence and confidence
-- **Cross-platform** — Windows first; Linux-ready abstractions
-- **Lightweight** — quiet background service, no cloud required
+- **Task-first** — activities outlive individual agents and applications
+- **Local-first** — immediate state, reminders, and core actions work on-device
+- **Structured memory** — checkpoints, decisions, failures, and evidence beat raw transcripts
+- **Transparent provenance** — every durable memory identifies its source
+- **Privacy by default** — capture and sync only the context required for a user action
+- **Cloud-backed durability** — optional sync makes activity memory available across sessions and agents
 
 ## Architecture (planned)
 
 ```
-pulse-cli  ──┐
-             ├── JSON-RPC (named pipe on Windows) ──► pulse-service
-pulse-app  ──┘                                            │
-                                                          ├── SQLite (pulse-core)
-                                                          ├── Claude / Codex session watchers
-                                                          └── Agent CLIs: grok → claude → codex
+pulse-cli / pulse-app
+          |
+          +-- local JSON-RPC --> pulse-service
+                                  |- SQLite activity cache
+                                  |- Claude / Codex session watchers
+                                  |- installed agent CLIs for summaries and handoffs
+                                  `- optional sync queue --> AWS Lambda --> CockroachDB / S3
 ```
 
 | Crate | Role |
@@ -47,17 +54,22 @@ pulse-app  ──┘                                            │
 | `pulse-service` | Background daemon: watchers, inference, IPC |
 | `pulse-sources` | Claude / Codex session adapters |
 | `pulse-llm` | Discover and call headless agent CLIs; heuristic fallback |
-| `pulse-app` | Tauri desktop UI (later) |
+| `pulse-app` | Tauri desktop UI and activity timeline |
 
-### Task states
+### Activity states
 
 `Inbox` → `Today` / `Next` / `Waiting` → `Done`
 
-Inferred tasks always land in **Inbox** first. You triage; Pulse does not silently mark work done without strong evidence or a check-in.
+The existing task model is the first activity root. Inferred tasks always land in
+**Inbox** first; Pulse does not silently mark work done without strong evidence
+or a check-in. Sessions, events, checkpoints, memories, reminders, artifacts,
+and handoffs are being added as linked activity records.
 
 ### LLM backends
 
-Pulse does **not** hold its own API keys. For inference and daily summaries it discovers installed agent CLIs on your `PATH`, in order:
+Pulse does **not** hold model-provider API keys. For intent interpretation,
+summaries, and handoffs it discovers installed agent CLIs on your `PATH`, in
+order:
 
 1. `grok`
 2. `claude`
@@ -71,11 +83,16 @@ Default root (Windows): `%LOCALAPPDATA%\Pulse\`
 
 | Path | Purpose |
 |---|---|
-| `pulse.db` | SQLite system of record |
-| `config.toml` | Runtime settings (sources, LLM preference, thresholds) |
+| `pulse.db` | Local activity cache and operational system of record |
+| `config.toml` | Runtime settings (sources, local agent preference, sync opt-in, thresholds) |
 | `logs/` | Service logs |
 | `exports/` | User-initiated exports |
 | `service.pid` | Background service PID (when running) |
+
+Cloud sync is opt-in. When enabled, Pulse queues approved structured activity
+records for its sync API, which persists durable memory in CockroachDB and may
+archive approved artifacts in S3. Local actions and reminders remain available
+if the cloud endpoint is unavailable.
 
 ## Development
 
@@ -176,7 +193,7 @@ Details and acceptance criteria: [docs/design.md](docs/design.md).
 ## Non-goals (MVP)
 
 - Full project management (Jira / Linear / Notion replacement)
-- Team collaboration or cloud sync by default
+- Team collaboration or mandatory cloud sync
 - Surveillance-style activity tracking
 - Broad third-party integrations early
 
