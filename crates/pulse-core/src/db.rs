@@ -5,9 +5,10 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{PulseError, Result};
 
 /// Highest migration version this binary knows how to apply.
-pub const LATEST_SCHEMA_VERSION: i64 = 1;
+pub const LATEST_SCHEMA_VERSION: i64 = 2;
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
+const MIGRATION_002: &str = include_str!("../migrations/002_activity_timeline.sql");
 
 /// Open (or create) the SQLite database, enable pragmas, apply migrations.
 pub fn open(path: &Path) -> Result<Connection> {
@@ -54,6 +55,15 @@ fn migrate(conn: &Connection) -> Result<()> {
             [1i64],
         )?;
     }
+    if current < 2 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_002)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
+            [2i64],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -97,7 +107,7 @@ mod tests {
             .unwrap();
         assert_eq!(n, 1);
         let v = current_version(&conn).unwrap();
-        assert_eq!(v, 1);
+        assert_eq!(v, LATEST_SCHEMA_VERSION);
     }
 
     #[test]
@@ -107,7 +117,7 @@ mod tests {
         let conn = open(&path).unwrap();
         drop(conn);
         let conn2 = open(&path).unwrap();
-        assert_eq!(current_version(&conn2).unwrap(), 1);
+        assert_eq!(current_version(&conn2).unwrap(), LATEST_SCHEMA_VERSION);
     }
 
     #[test]
@@ -115,6 +125,52 @@ mod tests {
         let conn = open_in_memory().unwrap();
         migrate(&conn).unwrap();
         migrate(&conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), 1);
+        assert_eq!(current_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrate_creates_activity_timeline_tables() {
+        let conn = open_in_memory().unwrap();
+        for table in [
+            "sessions",
+            "events",
+            "checkpoints",
+            "reminders",
+            "memories",
+            "artifacts",
+        ] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "missing {table} table");
+        }
+    }
+
+    #[test]
+    fn migrates_existing_v1_database_to_activity_timeline() {
+        let conn = Connection::open_in_memory().unwrap();
+        configure(&conn).unwrap();
+        conn.execute_batch(MIGRATION_001).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (1, datetime('now'))",
+            [],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(current_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'events', 'checkpoints', 'reminders', 'memories', 'artifacts')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 6);
     }
 }

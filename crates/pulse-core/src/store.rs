@@ -4,8 +4,10 @@ use uuid::Uuid;
 
 use crate::error::{PulseError, Result};
 use crate::models::{
-    CheckIn, CheckInKind, CheckInStatus, Evidence, NewCheckIn, NewEvidence, NewTask, SourceWatermark,
-    Summary, Task, TaskSource, TaskStatus, TaskUpdate,
+    ActivityEvent, Artifact, CheckIn, CheckInKind, CheckInStatus, Checkpoint, Evidence, Memory,
+    NewActivityEvent, NewArtifact, NewCheckIn, NewCheckpoint, NewEvidence, NewMemory, NewReminder,
+    NewSession, NewTask, Reminder, ReminderStatus, Session, SourceWatermark, Summary, Task,
+    TaskSource, TaskStatus, TaskUpdate,
 };
 use crate::state::validate_transition;
 
@@ -29,13 +31,13 @@ impl Store {
     pub fn create_task(&self, new: NewTask) -> Result<Task> {
         let title = new.title.trim();
         if title.is_empty() {
-            return Err(PulseError::Validation("task title must not be empty".into()));
+            return Err(PulseError::Validation(
+                "task title must not be empty".into(),
+            ));
         }
         if let Some(c) = new.confidence {
             if !(0.0..=1.0).contains(&c) {
-                return Err(PulseError::Validation(
-                    "confidence must be in [0,1]".into(),
-                ));
+                return Err(PulseError::Validation("confidence must be in [0,1]".into()));
             }
         }
 
@@ -137,7 +139,9 @@ impl Store {
         if let Some(title) = update.title {
             let t = title.trim();
             if t.is_empty() {
-                return Err(PulseError::Validation("task title must not be empty".into()));
+                return Err(PulseError::Validation(
+                    "task title must not be empty".into(),
+                ));
             }
             task.title = t.to_string();
         }
@@ -164,9 +168,7 @@ impl Store {
         }
         if let Some(c) = update.confidence {
             if !(0.0..=1.0).contains(&c) {
-                return Err(PulseError::Validation(
-                    "confidence must be in [0,1]".into(),
-                ));
+                return Err(PulseError::Validation("confidence must be in [0,1]".into()));
             }
             task.confidence = Some(c);
         }
@@ -283,9 +285,7 @@ impl Store {
             FROM tasks WHERE dedup_key = ?1
             "#,
         )?;
-        let task = stmt
-            .query_row(params![dedup_key], map_task)
-            .optional()?;
+        let task = stmt.query_row(params![dedup_key], map_task).optional()?;
         Ok(task)
     }
 
@@ -524,6 +524,243 @@ impl Store {
             .ok_or_else(|| PulseError::Validation("checkin missing".into()))
     }
 
+    // --- Activity timeline ---
+
+    pub fn create_session(&self, new: NewSession) -> Result<Session> {
+        self.ensure_task_exists(new.task_id)?;
+        validate_json(&new.metadata_json, "session metadata")?;
+        let id = Uuid::new_v4();
+        let created_at = Utc::now();
+        self.conn.execute(
+            r#"INSERT INTO sessions
+                (id, task_id, agent, application, repository_path, external_id, source_ref,
+                 started_at, ended_at, created_at, metadata_json)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+            params![
+                id.to_string(),
+                new.task_id.to_string(),
+                new.agent,
+                new.application,
+                new.repository_path,
+                new.external_id,
+                new.source_ref,
+                new.started_at.to_rfc3339(),
+                new.ended_at.map(|t| t.to_rfc3339()),
+                created_at.to_rfc3339(),
+                new.metadata_json
+            ],
+        )?;
+        self.get_session(id)?
+            .ok_or_else(|| PulseError::Validation("session missing after insert".into()))
+    }
+
+    pub fn get_session(&self, id: Uuid) -> Result<Option<Session>> {
+        self.conn.prepare(
+            "SELECT id, task_id, agent, application, repository_path, external_id, source_ref, started_at, ended_at, created_at, metadata_json FROM sessions WHERE id = ?1",
+        )?.query_row(params![id.to_string()], map_session).optional().map_err(Into::into)
+    }
+
+    pub fn list_sessions(&self, task_id: Uuid) -> Result<Vec<Session>> {
+        self.list_timeline_rows(
+            "SELECT id, task_id, agent, application, repository_path, external_id, source_ref, started_at, ended_at, created_at, metadata_json FROM sessions WHERE task_id = ?1 ORDER BY started_at DESC",
+            task_id,
+            map_session,
+        )
+    }
+
+    pub fn record_event(&self, new: NewActivityEvent) -> Result<ActivityEvent> {
+        self.ensure_task_exists(new.task_id)?;
+        self.ensure_session_belongs_to_task(new.session_id, new.task_id)?;
+        validate_nonempty(&new.kind, "event kind")?;
+        validate_nonempty(&new.summary, "event summary")?;
+        if let Some(payload) = &new.payload_json {
+            validate_json(payload, "event payload")?;
+        }
+        let id = Uuid::new_v4();
+        let created_at = Utc::now();
+        self.conn.execute(
+            "INSERT INTO events (id, task_id, session_id, kind, summary, payload_json, source_ref, occurred_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id.to_string(), new.task_id.to_string(), new.session_id.map(|v| v.to_string()),
+                new.kind, new.summary, new.payload_json, new.source_ref, new.occurred_at.to_rfc3339(), created_at.to_rfc3339()],
+        )?;
+        self.get_event(id)?
+            .ok_or_else(|| PulseError::Validation("event missing after insert".into()))
+    }
+
+    pub fn get_event(&self, id: Uuid) -> Result<Option<ActivityEvent>> {
+        self.conn.prepare("SELECT id, task_id, session_id, kind, summary, payload_json, source_ref, occurred_at, created_at FROM events WHERE id = ?1")?
+            .query_row(params![id.to_string()], map_event).optional().map_err(Into::into)
+    }
+
+    pub fn list_events(&self, task_id: Uuid) -> Result<Vec<ActivityEvent>> {
+        self.list_timeline_rows(
+            "SELECT id, task_id, session_id, kind, summary, payload_json, source_ref, occurred_at, created_at FROM events WHERE task_id = ?1 ORDER BY occurred_at DESC",
+            task_id, map_event,
+        )
+    }
+
+    pub fn create_checkpoint(&self, new: NewCheckpoint) -> Result<Checkpoint> {
+        self.ensure_task_exists(new.task_id)?;
+        self.ensure_session_belongs_to_task(new.session_id, new.task_id)?;
+        validate_nonempty(&new.summary, "checkpoint summary")?;
+        let decisions = serde_json::to_string(&new.decisions)
+            .map_err(|e| PulseError::Validation(format!("checkpoint decisions: {e}")))?;
+        let failures = serde_json::to_string(&new.failures)
+            .map_err(|e| PulseError::Validation(format!("checkpoint failures: {e}")))?;
+        let next_actions = serde_json::to_string(&new.next_actions)
+            .map_err(|e| PulseError::Validation(format!("checkpoint next actions: {e}")))?;
+        let id = Uuid::new_v4();
+        let created_at = Utc::now();
+        self.conn.execute(
+            "INSERT INTO checkpoints (id, task_id, session_id, summary, decisions_json, failures_json, next_actions_json, source_ref, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id.to_string(), new.task_id.to_string(), new.session_id.map(|v| v.to_string()),
+                new.summary, decisions, failures, next_actions, new.source_ref, created_at.to_rfc3339()],
+        )?;
+        self.get_checkpoint(id)?
+            .ok_or_else(|| PulseError::Validation("checkpoint missing after insert".into()))
+    }
+
+    pub fn get_checkpoint(&self, id: Uuid) -> Result<Option<Checkpoint>> {
+        self.conn.prepare("SELECT id, task_id, session_id, summary, decisions_json, failures_json, next_actions_json, source_ref, created_at FROM checkpoints WHERE id = ?1")?
+            .query_row(params![id.to_string()], map_checkpoint).optional().map_err(Into::into)
+    }
+
+    pub fn list_checkpoints(&self, task_id: Uuid) -> Result<Vec<Checkpoint>> {
+        self.list_timeline_rows("SELECT id, task_id, session_id, summary, decisions_json, failures_json, next_actions_json, source_ref, created_at FROM checkpoints WHERE task_id = ?1 ORDER BY created_at DESC", task_id, map_checkpoint)
+    }
+
+    pub fn create_reminder(&self, new: NewReminder) -> Result<Reminder> {
+        self.ensure_task_exists(new.task_id)?;
+        validate_nonempty(&new.title, "reminder title")?;
+        validate_json(&new.context_json, "reminder context")?;
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        self.conn.execute(
+            "INSERT INTO reminders (id, task_id, title, due_at, status, context_json, created_at, updated_at, completed_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, NULL)",
+            params![id.to_string(), new.task_id.to_string(), new.title, new.due_at.to_rfc3339(), new.context_json, now.to_rfc3339(), now.to_rfc3339()],
+        )?;
+        self.get_reminder(id)?
+            .ok_or_else(|| PulseError::Validation("reminder missing after insert".into()))
+    }
+
+    pub fn get_reminder(&self, id: Uuid) -> Result<Option<Reminder>> {
+        self.conn.prepare("SELECT id, task_id, title, due_at, status, context_json, created_at, updated_at, completed_at FROM reminders WHERE id = ?1")?
+            .query_row(params![id.to_string()], map_reminder).optional().map_err(Into::into)
+    }
+
+    pub fn list_reminders(&self, task_id: Uuid) -> Result<Vec<Reminder>> {
+        self.list_timeline_rows("SELECT id, task_id, title, due_at, status, context_json, created_at, updated_at, completed_at FROM reminders WHERE task_id = ?1 ORDER BY due_at ASC", task_id, map_reminder)
+    }
+
+    pub fn list_due_reminders(&self, due_before: chrono::DateTime<Utc>) -> Result<Vec<Reminder>> {
+        let mut stmt = self.conn.prepare("SELECT id, task_id, title, due_at, status, context_json, created_at, updated_at, completed_at FROM reminders WHERE status IN ('pending', 'snoozed') AND due_at <= ?1 ORDER BY due_at ASC")?;
+        let rows = stmt.query_map(params![due_before.to_rfc3339()], map_reminder)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn set_reminder_status(&self, id: Uuid, status: ReminderStatus) -> Result<Reminder> {
+        let now = Utc::now();
+        let completed_at = matches!(status, ReminderStatus::Done | ReminderStatus::Cancelled)
+            .then_some(now.to_rfc3339());
+        let changed = self.conn.execute(
+            "UPDATE reminders SET status = ?2, updated_at = ?3, completed_at = ?4 WHERE id = ?1",
+            params![
+                id.to_string(),
+                status.as_str(),
+                now.to_rfc3339(),
+                completed_at
+            ],
+        )?;
+        if changed == 0 {
+            return Err(PulseError::Validation(format!("reminder not found: {id}")));
+        }
+        self.get_reminder(id)?
+            .ok_or_else(|| PulseError::Validation("reminder missing after update".into()))
+    }
+
+    pub fn create_memory(&self, new: NewMemory) -> Result<Memory> {
+        self.ensure_task_exists(new.task_id)?;
+        validate_nonempty(&new.kind, "memory kind")?;
+        validate_nonempty(&new.content, "memory content")?;
+        validate_json(&new.provenance_json, "memory provenance")?;
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        self.conn.execute("INSERT INTO memories (id, task_id, checkpoint_id, kind, content, provenance_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![id.to_string(), new.task_id.to_string(), new.checkpoint_id.map(|v| v.to_string()), new.kind, new.content, new.provenance_json, now.to_rfc3339(), now.to_rfc3339()])?;
+        self.get_memory(id)?
+            .ok_or_else(|| PulseError::Validation("memory missing after insert".into()))
+    }
+
+    pub fn get_memory(&self, id: Uuid) -> Result<Option<Memory>> {
+        self.conn.prepare("SELECT id, task_id, checkpoint_id, kind, content, provenance_json, created_at, updated_at FROM memories WHERE id = ?1")?.query_row(params![id.to_string()], map_memory).optional().map_err(Into::into)
+    }
+
+    pub fn list_memories(&self, task_id: Uuid) -> Result<Vec<Memory>> {
+        self.list_timeline_rows("SELECT id, task_id, checkpoint_id, kind, content, provenance_json, created_at, updated_at FROM memories WHERE task_id = ?1 ORDER BY created_at DESC", task_id, map_memory)
+    }
+
+    pub fn create_artifact(&self, new: NewArtifact) -> Result<Artifact> {
+        self.ensure_task_exists(new.task_id)?;
+        self.ensure_session_belongs_to_task(new.session_id, new.task_id)?;
+        validate_nonempty(&new.kind, "artifact kind")?;
+        validate_nonempty(&new.name, "artifact name")?;
+        validate_json(&new.metadata_json, "artifact metadata")?;
+        if new.size_bytes.is_some_and(|size| size < 0) {
+            return Err(PulseError::Validation(
+                "artifact size must not be negative".into(),
+            ));
+        }
+        let id = Uuid::new_v4();
+        let created_at = Utc::now();
+        self.conn.execute("INSERT INTO artifacts (id, task_id, session_id, kind, name, local_path, content_type, size_bytes, checksum, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", params![id.to_string(), new.task_id.to_string(), new.session_id.map(|v| v.to_string()), new.kind, new.name, new.local_path, new.content_type, new.size_bytes, new.checksum, new.metadata_json, created_at.to_rfc3339()])?;
+        self.get_artifact(id)?
+            .ok_or_else(|| PulseError::Validation("artifact missing after insert".into()))
+    }
+
+    pub fn get_artifact(&self, id: Uuid) -> Result<Option<Artifact>> {
+        self.conn.prepare("SELECT id, task_id, session_id, kind, name, local_path, content_type, size_bytes, checksum, metadata_json, created_at FROM artifacts WHERE id = ?1")?.query_row(params![id.to_string()], map_artifact).optional().map_err(Into::into)
+    }
+
+    pub fn list_artifacts(&self, task_id: Uuid) -> Result<Vec<Artifact>> {
+        self.list_timeline_rows("SELECT id, task_id, session_id, kind, name, local_path, content_type, size_bytes, checksum, metadata_json, created_at FROM artifacts WHERE task_id = ?1 ORDER BY created_at DESC", task_id, map_artifact)
+    }
+
+    fn ensure_task_exists(&self, task_id: Uuid) -> Result<()> {
+        if self.get_task(task_id)?.is_none() {
+            return Err(PulseError::TaskNotFound(task_id.to_string()));
+        }
+        Ok(())
+    }
+
+    fn ensure_session_belongs_to_task(
+        &self,
+        session_id: Option<Uuid>,
+        task_id: Uuid,
+    ) -> Result<()> {
+        let Some(session_id) = session_id else {
+            return Ok(());
+        };
+        let session = self
+            .get_session(session_id)?
+            .ok_or_else(|| PulseError::Validation(format!("session not found: {session_id}")))?;
+        if session.task_id != task_id {
+            return Err(PulseError::Validation(
+                "session must belong to the same task".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn list_timeline_rows<T, F>(&self, sql: &str, task_id: Uuid, map: F) -> Result<Vec<T>>
+    where
+        F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![task_id.to_string()], map)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     pub fn resolve_checkin(&self, id_or_prefix: &str) -> Result<CheckIn> {
         let raw = id_or_prefix.trim();
         if let Ok(uuid) = Uuid::parse_str(raw) {
@@ -576,6 +813,113 @@ impl Store {
             _ => Err(PulseError::AmbiguousTaskId(raw.to_string())),
         }
     }
+}
+
+fn map_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
+    Ok(Session {
+        id: parse_uuid(row.get(0)?)?,
+        task_id: parse_uuid(row.get(1)?)?,
+        agent: row.get(2)?,
+        application: row.get(3)?,
+        repository_path: row.get(4)?,
+        external_id: row.get(5)?,
+        source_ref: row.get(6)?,
+        started_at: parse_dt(&row.get::<_, String>(7)?)?,
+        ended_at: row
+            .get::<_, Option<String>>(8)?
+            .map(|v| parse_dt(&v))
+            .transpose()?,
+        created_at: parse_dt(&row.get::<_, String>(9)?)?,
+        metadata_json: row.get(10)?,
+    })
+}
+
+fn map_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActivityEvent> {
+    Ok(ActivityEvent {
+        id: parse_uuid(row.get(0)?)?,
+        task_id: parse_uuid(row.get(1)?)?,
+        session_id: row
+            .get::<_, Option<String>>(2)?
+            .map(parse_uuid)
+            .transpose()?,
+        kind: row.get(3)?,
+        summary: row.get(4)?,
+        payload_json: row.get(5)?,
+        source_ref: row.get(6)?,
+        occurred_at: parse_dt(&row.get::<_, String>(7)?)?,
+        created_at: parse_dt(&row.get::<_, String>(8)?)?,
+    })
+}
+
+fn map_checkpoint(row: &rusqlite::Row<'_>) -> rusqlite::Result<Checkpoint> {
+    Ok(Checkpoint {
+        id: parse_uuid(row.get(0)?)?,
+        task_id: parse_uuid(row.get(1)?)?,
+        session_id: row
+            .get::<_, Option<String>>(2)?
+            .map(parse_uuid)
+            .transpose()?,
+        summary: row.get(3)?,
+        decisions: parse_json_vec(&row.get::<_, String>(4)?)?,
+        failures: parse_json_vec(&row.get::<_, String>(5)?)?,
+        next_actions: parse_json_vec(&row.get::<_, String>(6)?)?,
+        source_ref: row.get(7)?,
+        created_at: parse_dt(&row.get::<_, String>(8)?)?,
+    })
+}
+
+fn map_reminder(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reminder> {
+    let status: String = row.get(4)?;
+    Ok(Reminder {
+        id: parse_uuid(row.get(0)?)?,
+        task_id: parse_uuid(row.get(1)?)?,
+        title: row.get(2)?,
+        due_at: parse_dt(&row.get::<_, String>(3)?)?,
+        status: ReminderStatus::parse(&status)
+            .ok_or_else(|| bad_value(4, format!("bad reminder status {status}")))?,
+        context_json: row.get(5)?,
+        created_at: parse_dt(&row.get::<_, String>(6)?)?,
+        updated_at: parse_dt(&row.get::<_, String>(7)?)?,
+        completed_at: row
+            .get::<_, Option<String>>(8)?
+            .map(|v| parse_dt(&v))
+            .transpose()?,
+    })
+}
+
+fn map_memory(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
+    Ok(Memory {
+        id: parse_uuid(row.get(0)?)?,
+        task_id: parse_uuid(row.get(1)?)?,
+        checkpoint_id: row
+            .get::<_, Option<String>>(2)?
+            .map(parse_uuid)
+            .transpose()?,
+        kind: row.get(3)?,
+        content: row.get(4)?,
+        provenance_json: row.get(5)?,
+        created_at: parse_dt(&row.get::<_, String>(6)?)?,
+        updated_at: parse_dt(&row.get::<_, String>(7)?)?,
+    })
+}
+
+fn map_artifact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
+    Ok(Artifact {
+        id: parse_uuid(row.get(0)?)?,
+        task_id: parse_uuid(row.get(1)?)?,
+        session_id: row
+            .get::<_, Option<String>>(2)?
+            .map(parse_uuid)
+            .transpose()?,
+        kind: row.get(3)?,
+        name: row.get(4)?,
+        local_path: row.get(5)?,
+        content_type: row.get(6)?,
+        size_bytes: row.get(7)?,
+        checksum: row.get(8)?,
+        metadata_json: row.get(9)?,
+        created_at: parse_dt(&row.get::<_, String>(10)?)?,
+    })
 }
 
 fn map_checkin(row: &rusqlite::Row<'_>) -> rusqlite::Result<CheckIn> {
@@ -654,6 +998,27 @@ fn parse_uuid(s: String) -> rusqlite::Result<Uuid> {
 
 fn parse_dt(s: &str) -> rusqlite::Result<chrono::DateTime<Utc>> {
     DateTimeParse(s).try_into_dt()
+}
+
+fn validate_nonempty(value: &str, field: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(PulseError::Validation(format!("{field} must not be empty")));
+    }
+    Ok(())
+}
+
+fn validate_json(value: &str, field: &str) -> Result<()> {
+    serde_json::from_str::<serde_json::Value>(value)
+        .map(|_| ())
+        .map_err(|e| PulseError::Validation(format!("invalid {field} JSON: {e}")))
+}
+
+fn parse_json_vec(value: &str) -> rusqlite::Result<Vec<String>> {
+    serde_json::from_str(value).map_err(|e| bad_value(0, format!("invalid JSON string list: {e}")))
+}
+
+fn bad_value(column: usize, message: String) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, message.into())
 }
 
 struct DateTimeParse<'a>(&'a str);
@@ -780,5 +1145,118 @@ mod tests {
         let t = s.create_task(NewTask::manual("focus")).unwrap();
         let updated = s.set_status(t.id, TaskStatus::Today).unwrap();
         assert_eq!(updated.status, TaskStatus::Today);
+    }
+
+    #[test]
+    fn activity_timeline_records_roundtrip() {
+        let s = store();
+        let task = s
+            .create_task(NewTask::manual("Implement activity timeline"))
+            .unwrap();
+        let now = Utc::now();
+        let session = s
+            .create_session(NewSession {
+                task_id: task.id,
+                agent: Some("codex".into()),
+                application: Some("T3 Code".into()),
+                repository_path: Some("D:/own/pulse".into()),
+                external_id: Some("session-1".into()),
+                source_ref: Some("codex:session-1".into()),
+                started_at: now,
+                ended_at: None,
+                metadata_json: r#"{"branch":"main"}"#.into(),
+            })
+            .unwrap();
+        let event = s
+            .record_event(NewActivityEvent {
+                task_id: task.id,
+                session_id: Some(session.id),
+                kind: "test_passed".into(),
+                summary: "pulse-core tests passed".into(),
+                payload_json: Some(r#"{"count":36}"#.into()),
+                source_ref: None,
+                occurred_at: now,
+            })
+            .unwrap();
+        let checkpoint = s
+            .create_checkpoint(NewCheckpoint {
+                task_id: task.id,
+                session_id: Some(session.id),
+                summary: "Storage layer complete".into(),
+                decisions: vec!["Keep tasks as activity roots".into()],
+                failures: vec![],
+                next_actions: vec!["Add IPC commands".into()],
+                source_ref: None,
+            })
+            .unwrap();
+        let reminder = s
+            .create_reminder(NewReminder {
+                task_id: task.id,
+                title: "Review timeline UI".into(),
+                due_at: now,
+                context_json: r#"{"surface":"app"}"#.into(),
+            })
+            .unwrap();
+        let memory = s
+            .create_memory(NewMemory {
+                task_id: task.id,
+                checkpoint_id: Some(checkpoint.id),
+                kind: "decision".into(),
+                content: "Tasks remain the activity root.".into(),
+                provenance_json: r#"{"checkpoint":true}"#.into(),
+            })
+            .unwrap();
+        let artifact = s
+            .create_artifact(NewArtifact {
+                task_id: task.id,
+                session_id: Some(session.id),
+                kind: "patch".into(),
+                name: "timeline.patch".into(),
+                local_path: Some("D:/own/pulse/timeline.patch".into()),
+                content_type: Some("text/x-diff".into()),
+                size_bytes: Some(42),
+                checksum: None,
+                metadata_json: "{}".into(),
+            })
+            .unwrap();
+
+        assert_eq!(s.list_sessions(task.id).unwrap()[0].id, session.id);
+        assert_eq!(s.list_events(task.id).unwrap()[0].id, event.id);
+        assert_eq!(
+            s.list_checkpoints(task.id).unwrap()[0].decisions,
+            ["Keep tasks as activity roots"]
+        );
+        assert_eq!(s.list_memories(task.id).unwrap()[0].id, memory.id);
+        assert_eq!(s.list_artifacts(task.id).unwrap()[0].id, artifact.id);
+        assert_eq!(s.list_due_reminders(now).unwrap()[0].id, reminder.id);
+
+        let done = s
+            .set_reminder_status(reminder.id, ReminderStatus::Done)
+            .unwrap();
+        assert_eq!(done.status, ReminderStatus::Done);
+        assert!(done.completed_at.is_some());
+        assert!(s.list_due_reminders(now).unwrap().is_empty());
+    }
+
+    #[test]
+    fn timeline_rejects_session_from_another_task() {
+        let s = store();
+        let one = s.create_task(NewTask::manual("First task")).unwrap();
+        let two = s.create_task(NewTask::manual("Second task")).unwrap();
+        let session = s
+            .create_session(NewSession::for_task(one.id, Utc::now()))
+            .unwrap();
+        let err = s
+            .record_event(NewActivityEvent {
+                task_id: two.id,
+                session_id: Some(session.id),
+                kind: "note".into(),
+                summary: "incorrect session relationship".into(),
+                payload_json: None,
+                source_ref: None,
+                occurred_at: Utc::now(),
+            })
+            .unwrap_err();
+        assert!(matches!(err, PulseError::Validation(_)));
     }
 }

@@ -248,3 +248,196 @@ pub struct NewCheckIn {
     pub question: String,
     pub kind: CheckInKind,
 }
+
+/// A bounded period of work contributed by an agent or application.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub agent: Option<String>,
+    pub application: Option<String>,
+    pub repository_path: Option<String>,
+    pub external_id: Option<String>,
+    pub source_ref: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub metadata_json: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewSession {
+    pub task_id: Uuid,
+    pub agent: Option<String>,
+    pub application: Option<String>,
+    pub repository_path: Option<String>,
+    pub external_id: Option<String>,
+    pub source_ref: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub metadata_json: String,
+}
+
+impl NewSession {
+    pub fn for_task(task_id: Uuid, started_at: DateTime<Utc>) -> Self {
+        Self {
+            task_id,
+            agent: None,
+            application: None,
+            repository_path: None,
+            external_id: None,
+            source_ref: None,
+            started_at,
+            ended_at: None,
+            metadata_json: "{}".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityEvent {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub session_id: Option<Uuid>,
+    pub kind: String,
+    pub summary: String,
+    pub payload_json: Option<String>,
+    pub source_ref: Option<String>,
+    pub occurred_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewActivityEvent {
+    pub task_id: Uuid,
+    pub session_id: Option<Uuid>,
+    pub kind: String,
+    pub summary: String,
+    pub payload_json: Option<String>,
+    pub source_ref: Option<String>,
+    pub occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Checkpoint {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub session_id: Option<Uuid>,
+    pub summary: String,
+    pub decisions: Vec<String>,
+    pub failures: Vec<String>,
+    pub next_actions: Vec<String>,
+    pub source_ref: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewCheckpoint {
+    pub task_id: Uuid,
+    pub session_id: Option<Uuid>,
+    pub summary: String,
+    pub decisions: Vec<String>,
+    pub failures: Vec<String>,
+    pub next_actions: Vec<String>,
+    pub source_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReminderStatus {
+    Pending,
+    Snoozed,
+    Done,
+    Cancelled,
+}
+
+impl ReminderStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Snoozed => "snoozed",
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "pending" => Some(Self::Pending),
+            "snoozed" => Some(Self::Snoozed),
+            "done" => Some(Self::Done),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Reminder {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub title: String,
+    pub due_at: DateTime<Utc>,
+    pub status: ReminderStatus,
+    pub context_json: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewReminder {
+    pub task_id: Uuid,
+    pub title: String,
+    pub due_at: DateTime<Utc>,
+    pub context_json: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Memory {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub checkpoint_id: Option<Uuid>,
+    pub kind: String,
+    pub content: String,
+    pub provenance_json: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewMemory {
+    pub task_id: Uuid,
+    pub checkpoint_id: Option<Uuid>,
+    pub kind: String,
+    pub content: String,
+    pub provenance_json: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Artifact {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub session_id: Option<Uuid>,
+    pub kind: String,
+    pub name: String,
+    pub local_path: Option<String>,
+    pub content_type: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub checksum: Option<String>,
+    pub metadata_json: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewArtifact {
+    pub task_id: Uuid,
+    pub session_id: Option<Uuid>,
+    pub kind: String,
+    pub name: String,
+    pub local_path: Option<String>,
+    pub content_type: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub checksum: Option<String>,
+    pub metadata_json: String,
+}
