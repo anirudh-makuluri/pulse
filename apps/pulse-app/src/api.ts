@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Task, TaskDetail, TaskStatus } from "./types";
+import type { ActivityTimeline, Task, TaskDetail, TaskStatus } from "./types";
 
 export async function listTasks(status?: TaskStatus): Promise<Task[]> {
   return invoke<Task[]>("list_tasks", { status: status ?? null });
@@ -7,6 +7,10 @@ export async function listTasks(status?: TaskStatus): Promise<Task[]> {
 
 export async function getTask(id: string): Promise<TaskDetail> {
   return invoke<TaskDetail>("get_task", { id });
+}
+
+export async function getActivityTimeline(id: string): Promise<ActivityTimeline> {
+  return invoke<ActivityTimeline>("get_activity_timeline", { id });
 }
 
 export async function createTask(title: string, today: boolean): Promise<Task> {

@@ -3,9 +3,9 @@ import {
   createTask,
   exportHistory,
   generateSummary,
+  getActivityTimeline,
   getSettings,
   getSummary,
-  getTask,
   listTasks,
   markDone,
   privacyAcknowledge,
@@ -14,7 +14,7 @@ import {
   setTaskStatus,
   type SettingsSnapshot,
 } from "./api";
-import type { Task, TaskDetail, TaskStatus } from "./types";
+import type { ActivityTimeline, Task, TaskStatus } from "./types";
 
 type View =
   | "Inbox"
@@ -46,11 +46,76 @@ function sourceClass(source: string): string {
   return "source-manual";
 }
 
+type TimelineEntry = {
+  id: string;
+  at: string;
+  kind: string;
+  title: string;
+  detail?: string;
+};
+
+function timelineEntries(timeline: ActivityTimeline): TimelineEntry[] {
+  const entries: TimelineEntry[] = [
+    ...timeline.sessions.map((session) => ({
+      id: `session-${session.id}`,
+      at: session.started_at,
+      kind: "Session",
+      title:
+        [session.agent, session.application].filter(Boolean).join(" · ") ||
+        "Work session",
+      detail: session.repository_path ?? session.source_ref ?? undefined,
+    })),
+    ...timeline.events.map((event) => ({
+      id: `event-${event.id}`,
+      at: event.occurred_at,
+      kind: event.kind,
+      title: event.summary,
+      detail: event.source_ref ?? undefined,
+    })),
+    ...timeline.checkpoints.map((checkpoint) => ({
+      id: `checkpoint-${checkpoint.id}`,
+      at: checkpoint.created_at,
+      kind: "Checkpoint",
+      title: checkpoint.summary,
+      detail: checkpoint.next_actions.length
+        ? `Next: ${checkpoint.next_actions.join(" · ")}`
+        : undefined,
+    })),
+    ...timeline.evidence.map((evidence) => ({
+      id: `evidence-${evidence.id}`,
+      at: evidence.observed_at,
+      kind: "Evidence",
+      title: evidence.snippet ?? evidence.kind,
+      detail: evidence.source_ref,
+    })),
+    ...timeline.reminders.map((reminder) => ({
+      id: `reminder-${reminder.id}`,
+      at: reminder.due_at,
+      kind: `Reminder · ${reminder.status}`,
+      title: reminder.title,
+    })),
+    ...timeline.memories.map((memory) => ({
+      id: `memory-${memory.id}`,
+      at: memory.created_at,
+      kind: `Memory · ${memory.kind}`,
+      title: memory.content,
+    })),
+    ...timeline.artifacts.map((artifact) => ({
+      id: `artifact-${artifact.id}`,
+      at: artifact.created_at,
+      kind: `Artifact · ${artifact.kind}`,
+      title: artifact.name,
+      detail: artifact.local_path ?? undefined,
+    })),
+  ];
+  return entries.sort((a, b) => b.at.localeCompare(a.at));
+}
+
 export default function App() {
   const [view, setView] = useState<View>("Inbox");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<TaskDetail | null>(null);
+  const [detail, setDetail] = useState<ActivityTimeline | null>(null);
   const [title, setTitle] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState("…");
@@ -64,6 +129,7 @@ export default function App() {
     () => (view === "All" || !isTaskView ? undefined : (view as TaskStatus)),
     [view, isTaskView],
   );
+  const timeline = useMemo(() => (detail ? timelineEntries(detail) : []), [detail]);
 
   const refreshTasks = useCallback(async () => {
     if (!isTaskView) return;
@@ -126,7 +192,7 @@ export default function App() {
       return;
     }
     let cancelled = false;
-    void getTask(selectedId)
+    void getActivityTimeline(selectedId)
       .then((d) => {
         if (!cancelled) setDetail(d);
       })
@@ -157,7 +223,7 @@ export default function App() {
     try {
       await setTaskStatus(selectedId, status);
       await refreshTasks();
-      setDetail(await getTask(selectedId));
+      setDetail(await getActivityTimeline(selectedId));
     } catch (err) {
       setError(String(err));
     }
@@ -168,7 +234,7 @@ export default function App() {
     try {
       await markDone(selectedId);
       await refreshTasks();
-      setDetail(await getTask(selectedId));
+      setDetail(await getActivityTimeline(selectedId));
     } catch (err) {
       setError(String(err));
     }
@@ -457,25 +523,29 @@ export default function App() {
             ) : null}
 
             <div className="detail-section">
-              <h3>Evidence</h3>
-              {detail.evidence.length === 0 ? (
+              <h3>Chronological timeline</h3>
+              {timeline.length === 0 ? (
                 <div className="empty-list" style={{ padding: 12 }}>
-                  No evidence linked.
+                  No activity recorded yet.
                 </div>
               ) : (
-                detail.evidence.map((ev) => (
-                  <div className="evidence" key={ev.id}>
-                    <div>
-                      <strong>{ev.kind}</strong> · {ev.source_ref}
-                    </div>
-                    <div style={{ color: "var(--muted)", marginTop: 4 }}>
-                      {new Date(ev.observed_at).toLocaleString()}
-                    </div>
-                    {ev.snippet ? (
-                      <div style={{ marginTop: 8 }}>{ev.snippet}</div>
-                    ) : null}
-                  </div>
-                ))
+                <div className="timeline">
+                  {timeline.map((entry) => (
+                    <article className="timeline-item" key={entry.id}>
+                      <div className="timeline-dot" />
+                      <div className="timeline-content">
+                        <div className="timeline-meta">
+                          <span>{entry.kind}</span>
+                          <time>{new Date(entry.at).toLocaleString()}</time>
+                        </div>
+                        <div className="timeline-title">{entry.title}</div>
+                        {entry.detail ? (
+                          <div className="timeline-detail">{entry.detail}</div>
+                        ) : null}
+                      </div>
+                    </article>
+                  ))}
+                </div>
               )}
             </div>
 

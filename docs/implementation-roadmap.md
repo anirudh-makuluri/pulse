@@ -23,7 +23,7 @@ cross-agent activity and memory layer.
 6. [x] Extend `pulse-core` models and store operations.
 7. [x] Add IPC and CLI commands to create activities, attach sessions, record
    checkpoints, and inspect timelines.
-8. [ ] Update the Tauri UI with an activity-detail view and chronological timeline.
+8. [x] Update the Tauri UI with an activity-detail view and chronological timeline.
 
 ## Workstream 3: Pet omnibox and reminders
 

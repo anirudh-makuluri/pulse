@@ -1,14 +1,27 @@
 use pulse_core::{
-    export_history, load_config, open_db, try_connect, write_config, Evidence, ExportFormat,
-    NewTask, PulsePaths, Store, Task, TaskStatus, TaskUpdate,
+    export_history, load_config, open_db, try_connect, write_config, ActivityEvent, Artifact,
+    Checkpoint, Evidence, ExportFormat, Memory, NewTask, PulsePaths, Reminder, Session, Store,
+    Task, TaskStatus, TaskUpdate,
 };
 use pulse_llm::llm_status;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 struct TaskDetail {
     task: Task,
     evidence: Vec<Evidence>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ActivityTimeline {
+    task: Task,
+    evidence: Vec<Evidence>,
+    sessions: Vec<Session>,
+    events: Vec<ActivityEvent>,
+    checkpoints: Vec<Checkpoint>,
+    reminders: Vec<Reminder>,
+    memories: Vec<Memory>,
+    artifacts: Vec<Artifact>,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,6 +77,27 @@ fn with_backend_get(id: &str) -> Result<TaskDetail, String> {
     Ok(TaskDetail { task, evidence })
 }
 
+fn with_backend_timeline(id: &str) -> Result<ActivityTimeline, String> {
+    let paths = paths()?;
+    let cfg = load_config(&paths.config_path()).map_err(|e| e.to_string())?;
+    if let Ok(mut c) = try_connect(&cfg.service.pipe_name) {
+        let timeline = c.activities_timeline(id).map_err(|e| e.to_string())?;
+        return serde_json::from_value(timeline).map_err(|e| e.to_string());
+    }
+    let store = open_store()?;
+    let task = store.resolve_task(id).map_err(|e| e.to_string())?;
+    Ok(ActivityTimeline {
+        evidence: store.list_evidence(task.id).map_err(|e| e.to_string())?,
+        sessions: store.list_sessions(task.id).map_err(|e| e.to_string())?,
+        events: store.list_events(task.id).map_err(|e| e.to_string())?,
+        checkpoints: store.list_checkpoints(task.id).map_err(|e| e.to_string())?,
+        reminders: store.list_reminders(task.id).map_err(|e| e.to_string())?,
+        memories: store.list_memories(task.id).map_err(|e| e.to_string())?,
+        artifacts: store.list_artifacts(task.id).map_err(|e| e.to_string())?,
+        task,
+    })
+}
+
 #[tauri::command]
 fn list_tasks(status: Option<String>) -> Result<Vec<Task>, String> {
     let st = match status.as_deref() {
@@ -76,6 +110,11 @@ fn list_tasks(status: Option<String>) -> Result<Vec<Task>, String> {
 #[tauri::command]
 fn get_task(id: String) -> Result<TaskDetail, String> {
     with_backend_get(&id)
+}
+
+#[tauri::command]
+fn get_activity_timeline(id: String) -> Result<ActivityTimeline, String> {
+    with_backend_timeline(&id)
 }
 
 #[tauri::command]
@@ -292,6 +331,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_tasks,
             get_task,
+            get_activity_timeline,
             create_task,
             set_task_status,
             mark_done,

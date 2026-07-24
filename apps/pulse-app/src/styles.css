@@ -252,6 +252,91 @@ input {
   margin-top: 8px;
 }
 
+.timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0 2px;
+}
+
+.timeline-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  padding: 0 0 14px;
+}
+
+.timeline-item::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 14px;
+  bottom: -1px;
+  width: 1px;
+  background: var(--border);
+}
+
+.timeline-item:last-child {
+  padding-bottom: 0;
+}
+
+.timeline-item:last-child::before {
+  display: none;
+}
+
+.timeline-dot {
+  position: relative;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  margin: 3px 0 0 2px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: var(--panel);
+}
+
+.timeline-content {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 10px;
+  background: var(--bg);
+}
+
+.timeline-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.timeline-meta span {
+  color: #a9c8fb;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.timeline-meta time {
+  text-align: right;
+}
+
+.timeline-title {
+  margin-top: 4px;
+  color: #dce7f9;
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.timeline-detail {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .task-actions {
   display: flex;
   flex-wrap: wrap;
