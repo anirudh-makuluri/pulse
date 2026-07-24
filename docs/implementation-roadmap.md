@@ -21,7 +21,7 @@ cross-agent activity and memory layer.
 5. [x] Add additive SQLite migrations for sessions, events, checkpoints, reminders,
    memories, and artifacts.
 6. [x] Extend `pulse-core` models and store operations.
-7. [ ] Add IPC and CLI commands to create activities, attach sessions, record
+7. [x] Add IPC and CLI commands to create activities, attach sessions, record
    checkpoints, and inspect timelines.
 8. [ ] Update the Tauri UI with an activity-detail view and chronological timeline.
 

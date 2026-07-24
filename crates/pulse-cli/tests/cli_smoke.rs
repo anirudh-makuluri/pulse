@@ -8,11 +8,12 @@ fn pulse() -> Command {
 
 #[test]
 fn version_prints() {
-    let out = pulse()
-        .arg("version")
-        .output()
-        .expect("run pulse version");
-    assert!(out.status.success(), "stderr={}", String::from_utf8_lossy(&out.stderr));
+    let out = pulse().arg("version").output().expect("run pulse version");
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("pulse"), "{stdout}");
 }
@@ -153,4 +154,90 @@ fn empty_title_fails() {
         .output()
         .unwrap();
     assert!(!add.status.success());
+}
+
+#[test]
+fn activity_timeline_roundtrip() {
+    let dir = tempdir().unwrap();
+    let data = dir.path();
+
+    let create = pulse()
+        .args(["--data-dir"])
+        .arg(data)
+        .args(["activities", "create", "Implement local timeline"])
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let activity_id = String::from_utf8_lossy(&create.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+
+    let attach = pulse()
+        .args(["--data-dir"])
+        .arg(data)
+        .args([
+            "activities",
+            "attach-session",
+            &activity_id,
+            "--agent",
+            "codex",
+            "--metadata",
+            r#"{"branch":"main"}"#,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        attach.status.success(),
+        "{}",
+        String::from_utf8_lossy(&attach.stderr)
+    );
+    let session_id = String::from_utf8_lossy(&attach.stdout)
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .to_owned();
+
+    let checkpoint = pulse()
+        .args(["--data-dir"])
+        .arg(data)
+        .args([
+            "activities",
+            "checkpoint",
+            &activity_id,
+            "Core store is ready",
+            "--session-id",
+            &session_id,
+            "--decision",
+            "Keep tasks as roots",
+            "--next-action",
+            "Add the Tauri timeline",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        checkpoint.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checkpoint.stderr)
+    );
+
+    let timeline = pulse()
+        .args(["--data-dir"])
+        .arg(data)
+        .args(["activities", "timeline", &activity_id, "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        timeline.status.success(),
+        "{}",
+        String::from_utf8_lossy(&timeline.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&timeline.stdout).unwrap();
+    assert_eq!(value["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(value["checkpoints"].as_array().unwrap().len(), 1);
 }

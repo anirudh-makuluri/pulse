@@ -8,12 +8,13 @@ use std::time::Duration;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
-use pulse_core::ipc::pipe::{self, current_pid};
 use pulse_core::ipc::pid::{remove_pid_file_if_matches, write_pid_file, ServicePidFile};
+use pulse_core::ipc::pipe::{self, current_pid};
 use pulse_core::ipc::rpc::{RpcCode, RpcErrorObject, RpcHandler};
 use pulse_core::{
     apply_checkin_answer, export_history, load_config, open_db, parse_answer_input, write_config,
-    Config, ExportFormat, NewTask, PulseError, PulsePaths, Store, TaskStatus, TaskUpdate,
+    Config, ExportFormat, NewCheckpoint, NewSession, NewTask, PulseError, PulsePaths, Store,
+    TaskStatus, TaskUpdate,
 };
 use pulse_llm::llm_status;
 use pulse_service::pipeline;
@@ -162,9 +163,8 @@ impl RpcHandler for ServiceState {
                 Ok(json!({ "ok": true }))
             }
             "config.reload" => {
-                let cfg = load_config(&self.paths.config_path()).map_err(|e| {
-                    RpcErrorObject::new(RpcCode::ConfigError, e.to_string())
-                })?;
+                let cfg = load_config(&self.paths.config_path())
+                    .map_err(|e| RpcErrorObject::new(RpcCode::ConfigError, e.to_string()))?;
                 let mut guard = self.config.lock().map_err(|_| internal("config lock"))?;
                 *guard = cfg;
                 Ok(json!({ "ok": true }))
@@ -205,13 +205,16 @@ impl RpcHandler for ServiceState {
                         ));
                     }
                 }
-                write_config(&self.paths.config_path(), &cfg).map_err(|e| {
-                    RpcErrorObject::new(RpcCode::ConfigError, e.to_string())
-                })?;
+                write_config(&self.paths.config_path(), &cfg)
+                    .map_err(|e| RpcErrorObject::new(RpcCode::ConfigError, e.to_string()))?;
                 Ok(json!({ "ok": true, "id": id, "enabled": enabled }))
             }
             "inference.run_once" => {
-                let cfg = self.config.lock().map_err(|_| internal("config lock"))?.clone();
+                let cfg = self
+                    .config
+                    .lock()
+                    .map_err(|_| internal("config lock"))?
+                    .clone();
                 let mut store = self.store.lock().map_err(|_| internal("store lock"))?;
                 let mut last = std::collections::HashMap::new();
                 let mut hour = 0u32;
@@ -222,9 +225,8 @@ impl RpcHandler for ServiceState {
             "privacy.acknowledge" => {
                 let mut cfg = self.config.lock().map_err(|_| internal("config lock"))?;
                 cfg.privacy.acknowledge_remote_llm = true;
-                write_config(&self.paths.config_path(), &cfg).map_err(|e| {
-                    RpcErrorObject::new(RpcCode::ConfigError, e.to_string())
-                })?;
+                write_config(&self.paths.config_path(), &cfg)
+                    .map_err(|e| RpcErrorObject::new(RpcCode::ConfigError, e.to_string()))?;
                 Ok(json!({ "ok": true, "acknowledge_remote_llm": true }))
             }
             "llm.status" => {
@@ -245,7 +247,11 @@ impl RpcHandler for ServiceState {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-                let cfg = self.config.lock().map_err(|_| internal("config lock"))?.clone();
+                let cfg = self
+                    .config
+                    .lock()
+                    .map_err(|_| internal("config lock"))?
+                    .clone();
                 let mut store = self.store.lock().map_err(|_| internal("store lock"))?;
                 let text = pipeline::generate_summary(&mut store, &cfg, &day)
                     .map_err(|e| RpcErrorObject::new(RpcCode::InternalError, e))?;
@@ -274,9 +280,10 @@ impl RpcHandler for ServiceState {
             }
             "checkin.answer" => {
                 let id = param_str(&params, "id")?;
-                let answer = params.get("answer").cloned().ok_or_else(|| {
-                    RpcErrorObject::new(RpcCode::InvalidParams, "missing answer")
-                })?;
+                let answer = params
+                    .get("answer")
+                    .cloned()
+                    .ok_or_else(|| RpcErrorObject::new(RpcCode::InvalidParams, "missing answer"))?;
                 // Allow string answers via JSON string
                 let answer = if let Some(s) = answer.as_str() {
                     parse_answer_input(s).map_err(map_store_err)?
@@ -311,16 +318,86 @@ impl RpcHandler for ServiceState {
                     .and_then(|v| v.as_str())
                     .map(std::path::PathBuf::from);
                 let store = self.store.lock().map_err(|_| internal("store lock"))?;
-                let path = export_history(
-                    &store,
-                    &self.paths,
-                    fmt,
-                    from,
-                    to,
-                    out.as_deref(),
-                )
-                .map_err(map_store_err)?;
+                let path = export_history(&store, &self.paths, fmt, from, to, out.as_deref())
+                    .map_err(map_store_err)?;
                 Ok(json!({ "path": path }))
+            }
+            "activities.create" => {
+                let title = param_str(&params, "title")?;
+                let notes = params
+                    .get("notes")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned);
+                let mut new = NewTask::manual(title);
+                new.notes = notes;
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let activity = store.create_task(new).map_err(map_store_err)?;
+                Ok(json!({ "activity": activity }))
+            }
+            "sessions.attach" => {
+                let activity_id = param_str(&params, "activity_id")?;
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let activity = store.resolve_task(&activity_id).map_err(map_store_err)?;
+                let metadata_json = params
+                    .get("metadata")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}))
+                    .to_string();
+                let session = store
+                    .create_session(NewSession {
+                        task_id: activity.id,
+                        agent: optional_str(&params, "agent"),
+                        application: optional_str(&params, "application"),
+                        repository_path: optional_str(&params, "repository_path"),
+                        external_id: optional_str(&params, "external_id"),
+                        source_ref: optional_str(&params, "source_ref"),
+                        started_at: Utc::now(),
+                        ended_at: None,
+                        metadata_json,
+                    })
+                    .map_err(map_store_err)?;
+                Ok(json!({ "session": session }))
+            }
+            "checkpoints.create" => {
+                let activity_id = param_str(&params, "activity_id")?;
+                let summary = param_str(&params, "summary")?;
+                let session_id = optional_uuid(&params, "session_id")?;
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let activity = store.resolve_task(&activity_id).map_err(map_store_err)?;
+                let checkpoint = store
+                    .create_checkpoint(NewCheckpoint {
+                        task_id: activity.id,
+                        session_id,
+                        summary,
+                        decisions: string_list(&params, "decisions")?,
+                        failures: string_list(&params, "failures")?,
+                        next_actions: string_list(&params, "next_actions")?,
+                        source_ref: optional_str(&params, "source_ref"),
+                    })
+                    .map_err(map_store_err)?;
+                Ok(json!({ "checkpoint": checkpoint }))
+            }
+            "activities.timeline" => {
+                let activity_id = param_str(&params, "activity_id")?;
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let activity = store.resolve_task(&activity_id).map_err(map_store_err)?;
+                let evidence = store.list_evidence(activity.id).map_err(map_store_err)?;
+                let sessions = store.list_sessions(activity.id).map_err(map_store_err)?;
+                let events = store.list_events(activity.id).map_err(map_store_err)?;
+                let checkpoints = store.list_checkpoints(activity.id).map_err(map_store_err)?;
+                let reminders = store.list_reminders(activity.id).map_err(map_store_err)?;
+                let memories = store.list_memories(activity.id).map_err(map_store_err)?;
+                let artifacts = store.list_artifacts(activity.id).map_err(map_store_err)?;
+                Ok(json!({
+                    "activity": activity,
+                    "evidence": evidence,
+                    "sessions": sessions,
+                    "events": events,
+                    "checkpoints": checkpoints,
+                    "reminders": reminders,
+                    "memories": memories,
+                    "artifacts": artifacts,
+                }))
             }
             "tasks.list" => {
                 let status = parse_status_filter(&params)?;
@@ -415,13 +492,60 @@ fn param_str(params: &Value, key: &str) -> Result<String, RpcErrorObject> {
         })
 }
 
+fn optional_str(params: &Value, key: &str) -> Option<String> {
+    params.get(key).and_then(|v| v.as_str()).map(str::to_owned)
+}
+
+fn optional_uuid(params: &Value, key: &str) -> Result<Option<uuid::Uuid>, RpcErrorObject> {
+    let Some(value) = params.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let raw = value.as_str().ok_or_else(|| {
+        RpcErrorObject::new(
+            RpcCode::InvalidParams,
+            format!("{key} must be a UUID string"),
+        )
+    })?;
+    uuid::Uuid::parse_str(raw).map(Some).map_err(|_| {
+        RpcErrorObject::new(
+            RpcCode::InvalidParams,
+            format!("{key} must be a valid UUID"),
+        )
+    })
+}
+
+fn string_list(params: &Value, key: &str) -> Result<Vec<String>, RpcErrorObject> {
+    let Some(value) = params.get(key) else {
+        return Ok(Vec::new());
+    };
+    let values = value.as_array().ok_or_else(|| {
+        RpcErrorObject::new(
+            RpcCode::InvalidParams,
+            format!("{key} must be an array of strings"),
+        )
+    })?;
+    values
+        .iter()
+        .map(|value| {
+            value.as_str().map(str::to_owned).ok_or_else(|| {
+                RpcErrorObject::new(
+                    RpcCode::InvalidParams,
+                    format!("{key} must be an array of strings"),
+                )
+            })
+        })
+        .collect()
+}
+
 fn parse_status_value(v: &Value) -> Result<TaskStatus, RpcErrorObject> {
     let s = v
         .as_str()
         .ok_or_else(|| RpcErrorObject::new(RpcCode::InvalidParams, "status must be a string"))?;
-    TaskStatus::parse(s).ok_or_else(|| {
-        RpcErrorObject::new(RpcCode::InvalidParams, format!("invalid status '{s}'"))
-    })
+    TaskStatus::parse(s)
+        .ok_or_else(|| RpcErrorObject::new(RpcCode::InvalidParams, format!("invalid status '{s}'")))
 }
 
 fn parse_status_filter(params: &Value) -> Result<Option<TaskStatus>, RpcErrorObject> {

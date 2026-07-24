@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::error::{PulseError, Result};
 use crate::ipc::pipe;
 use crate::ipc::rpc::call;
-use crate::models::{Evidence, Task, TaskStatus};
+use crate::models::{Checkpoint, Evidence, Session, Task, TaskStatus};
 
 pub struct IpcClient {
     stream: std::fs::File,
@@ -46,10 +46,7 @@ impl IpcClient {
                 .ok_or_else(|| PulseError::Ipc("tasks.get missing task".into()))?,
         )
         .map_err(|e| PulseError::Ipc(format!("decode task: {e}")))?;
-        let evidence = result
-            .get("evidence")
-            .cloned()
-            .unwrap_or_else(|| json!([]));
+        let evidence = result.get("evidence").cloned().unwrap_or_else(|| json!([]));
         let evidence: Vec<Evidence> = serde_json::from_value(evidence)
             .map_err(|e| PulseError::Ipc(format!("decode evidence: {e}")))?;
         Ok((task, evidence))
@@ -98,6 +95,43 @@ impl IpcClient {
         decode_task(result)
     }
 
+    pub fn activities_create(&mut self, title: &str, notes: Option<String>) -> Result<Task> {
+        let mut params = json!({ "title": title });
+        if let Some(notes) = notes {
+            params["notes"] = json!(notes);
+        }
+        let result = call(&mut self.stream, "activities.create", params)?;
+        decode_value(result, "activity")
+    }
+
+    pub fn sessions_attach(&mut self, activity_id: &str, params: Value) -> Result<Session> {
+        let mut params = params;
+        params["activity_id"] = json!(activity_id);
+        let result = call(&mut self.stream, "sessions.attach", params)?;
+        decode_value(result, "session")
+    }
+
+    pub fn checkpoints_create(
+        &mut self,
+        activity_id: &str,
+        summary: &str,
+        params: Value,
+    ) -> Result<Checkpoint> {
+        let mut params = params;
+        params["activity_id"] = json!(activity_id);
+        params["summary"] = json!(summary);
+        let result = call(&mut self.stream, "checkpoints.create", params)?;
+        decode_value(result, "checkpoint")
+    }
+
+    pub fn activities_timeline(&mut self, activity_id: &str) -> Result<Value> {
+        call(
+            &mut self.stream,
+            "activities.timeline",
+            json!({ "activity_id": activity_id }),
+        )
+    }
+
     pub fn service_status(&mut self) -> Result<Value> {
         call(&mut self.stream, "service.status", json!({}))
     }
@@ -135,11 +169,15 @@ impl IpcClient {
 }
 
 fn decode_task(result: Value) -> Result<Task> {
-    let task = result
-        .get("task")
+    decode_value(result, "task")
+}
+
+fn decode_value<T: serde::de::DeserializeOwned>(result: Value, key: &str) -> Result<T> {
+    let value = result
+        .get(key)
         .cloned()
-        .ok_or_else(|| PulseError::Ipc("response missing task".into()))?;
-    serde_json::from_value(task).map_err(|e| PulseError::Ipc(format!("decode task: {e}")))
+        .ok_or_else(|| PulseError::Ipc(format!("response missing {key}")))?;
+    serde_json::from_value(value).map_err(|e| PulseError::Ipc(format!("decode {key}: {e}")))
 }
 
 /// Try connect; map common failures.

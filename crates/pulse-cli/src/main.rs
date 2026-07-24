@@ -8,8 +8,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use pulse_core::ipc::pid::{live_service_pid, process_is_live, read_pid_file};
 use pulse_core::{
     apply_checkin_answer, export_history, load_config, open_db, parse_answer_input, try_connect,
-    write_config, ExportFormat, IpcClient, NewTask, PulseError, PulsePaths, Store, Task,
-    TaskStatus, TaskUpdate,
+    write_config, ExportFormat, IpcClient, NewCheckpoint, NewSession, NewTask, PulseError,
+    PulsePaths, Store, Task, TaskStatus, TaskUpdate,
 };
 use pulse_llm::{llm_status, probe_preference};
 
@@ -39,6 +39,11 @@ enum Commands {
     Tasks {
         #[command(subcommand)]
         command: TasksCmd,
+    },
+    /// Create and inspect durable activity timelines
+    Activities {
+        #[command(subcommand)]
+        command: ActivitiesCmd,
     },
     Config {
         #[command(subcommand)]
@@ -119,6 +124,54 @@ enum TasksCmd {
 }
 
 #[derive(Subcommand, Debug)]
+enum ActivitiesCmd {
+    /// Create an activity (the existing task record is the activity root)
+    Create {
+        title: Vec<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Attach an agent or application session to an activity
+    AttachSession {
+        activity_id: String,
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        application: Option<String>,
+        #[arg(long)]
+        repository_path: Option<String>,
+        #[arg(long)]
+        external_id: Option<String>,
+        #[arg(long)]
+        source_ref: Option<String>,
+        /// JSON metadata, such as '{"branch":"main"}'
+        #[arg(long)]
+        metadata: Option<String>,
+    },
+    /// Record an explicit progress checkpoint
+    Checkpoint {
+        activity_id: String,
+        summary: Vec<String>,
+        #[arg(long)]
+        session_id: Option<String>,
+        #[arg(long = "decision")]
+        decisions: Vec<String>,
+        #[arg(long = "failure")]
+        failures: Vec<String>,
+        #[arg(long = "next-action")]
+        next_actions: Vec<String>,
+        #[arg(long)]
+        source_ref: Option<String>,
+    },
+    /// Print the activity and all timeline records in chronological groups
+    Timeline {
+        activity_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum ConfigCmd {
     Show,
     Path,
@@ -153,13 +206,9 @@ enum SourcesCmd {
     /// List sources and enabled flags
     List,
     /// Enable a source (claude|codex)
-    Enable {
-        id: String,
-    },
+    Enable { id: String },
     /// Disable a source
-    Disable {
-        id: String,
-    },
+    Disable { id: String },
     /// Trigger one inference scan now (service must be running)
     Scan,
 }
@@ -367,8 +416,87 @@ fn run() -> Result<(), CliError> {
         },
         Commands::Checkin { command } => match command {
             CheckinCmd::List { all } => checkin_list(&paths, !all),
-            CheckinCmd::Answer { id, response } => {
-                checkin_answer(&paths, &id, &response.join(" "))
+            CheckinCmd::Answer { id, response } => checkin_answer(&paths, &id, &response.join(" ")),
+        },
+        Commands::Activities { command } => match command {
+            ActivitiesCmd::Create { title, notes } => {
+                let title = title.join(" ");
+                if title.trim().is_empty() {
+                    return Err(CliError::user("title must not be empty"));
+                }
+                let mut backend = open_backend(&paths, true)?;
+                let activity = activities_create(&mut backend, &title, notes)?;
+                println!("{}  {}", short_id(&activity.id), activity.title);
+                Ok(())
+            }
+            ActivitiesCmd::AttachSession {
+                activity_id,
+                agent,
+                application,
+                repository_path,
+                external_id,
+                source_ref,
+                metadata,
+            } => {
+                let metadata = parse_json_arg(metadata, "metadata")?;
+                let mut backend = open_backend(&paths, true)?;
+                let session = sessions_attach(
+                    &mut backend,
+                    &activity_id,
+                    agent,
+                    application,
+                    repository_path,
+                    external_id,
+                    source_ref,
+                    metadata,
+                )?;
+                println!(
+                    "session {} attached to {}",
+                    session.id,
+                    short_id(&session.task_id)
+                );
+                Ok(())
+            }
+            ActivitiesCmd::Checkpoint {
+                activity_id,
+                summary,
+                session_id,
+                decisions,
+                failures,
+                next_actions,
+                source_ref,
+            } => {
+                let summary = summary.join(" ");
+                if summary.trim().is_empty() {
+                    return Err(CliError::user("checkpoint summary must not be empty"));
+                }
+                let mut backend = open_backend(&paths, true)?;
+                let checkpoint = checkpoints_create(
+                    &mut backend,
+                    &activity_id,
+                    &summary,
+                    session_id,
+                    decisions,
+                    failures,
+                    next_actions,
+                    source_ref,
+                )?;
+                println!("checkpoint {} recorded", checkpoint.id);
+                Ok(())
+            }
+            ActivitiesCmd::Timeline { activity_id, json } => {
+                let mut backend = open_backend(&paths, false)?;
+                let timeline = activities_timeline(&mut backend, &activity_id)?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&timeline)
+                            .map_err(|e| CliError::user(format!("json encode: {e}")))?
+                    );
+                } else {
+                    print_activity_timeline(&timeline)?;
+                }
+                Ok(())
             }
         },
         Commands::Tasks { command } => {
@@ -380,9 +508,8 @@ fn run() -> Result<(), CliError> {
                     if json {
                         println!(
                             "{}",
-                            serde_json::to_string_pretty(&tasks).map_err(|e| {
-                                CliError::user(format!("json encode: {e}"))
-                            })?
+                            serde_json::to_string_pretty(&tasks)
+                                .map_err(|e| { CliError::user(format!("json encode: {e}")) })?
                         );
                     } else {
                         print_task_table(&tasks);
@@ -415,11 +542,7 @@ fn run() -> Result<(), CliError> {
                     if title.trim().is_empty() {
                         return Err(CliError::user("title must not be empty"));
                     }
-                    let status = if today {
-                        Some(TaskStatus::Today)
-                    } else {
-                        None
-                    };
+                    let status = if today { Some(TaskStatus::Today) } else { None };
                     let task = tasks_create(&mut backend, &title, status, notes)?;
                     println!("{}  {}", short_id(&task.id), task.title);
                     Ok(())
@@ -456,8 +579,7 @@ fn run() -> Result<(), CliError> {
                     Ok(())
                 }
                 TasksCmd::Move { id, status } => {
-                    let task =
-                        tasks_update(&mut backend, &id, None, Some(status.into()), None)?;
+                    let task = tasks_update(&mut backend, &id, None, Some(status.into()), None)?;
                     println!(
                         "moved  {}  -> {}  {}",
                         short_id(&task.id),
@@ -494,7 +616,9 @@ fn open_backend(paths: &PulsePaths, for_write: bool) -> Result<Backend, CliError
                     ));
                 }
                 // read-only direct
-                eprintln!("warning: service unreachable; opening DB read-only path via direct store");
+                eprintln!(
+                    "warning: service unreachable; opening DB read-only path via direct store"
+                );
             } else {
                 eprintln!("warning: service not running; using direct database access");
             }
@@ -511,10 +635,7 @@ fn tasks_list(be: &mut Backend, status: Option<TaskStatus>) -> Result<Vec<Task>,
     }
 }
 
-fn tasks_get(
-    be: &mut Backend,
-    id: &str,
-) -> Result<(Task, Vec<pulse_core::Evidence>), CliError> {
+fn tasks_get(be: &mut Backend, id: &str) -> Result<(Task, Vec<pulse_core::Evidence>), CliError> {
     match be {
         Backend::Ipc(c) => Ok(c.tasks_get(id)?),
         Backend::Direct(s) => {
@@ -575,6 +696,132 @@ fn tasks_update(
                 },
             )?)
         }
+    }
+}
+
+fn activities_create(
+    be: &mut Backend,
+    title: &str,
+    notes: Option<String>,
+) -> Result<Task, CliError> {
+    match be {
+        Backend::Ipc(c) => Ok(c.activities_create(title, notes)?),
+        Backend::Direct(s) => {
+            let mut new = NewTask::manual(title);
+            new.notes = notes;
+            Ok(s.create_task(new)?)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sessions_attach(
+    be: &mut Backend,
+    activity_id: &str,
+    agent: Option<String>,
+    application: Option<String>,
+    repository_path: Option<String>,
+    external_id: Option<String>,
+    source_ref: Option<String>,
+    metadata: serde_json::Value,
+) -> Result<pulse_core::Session, CliError> {
+    match be {
+        Backend::Ipc(c) => Ok(c.sessions_attach(
+            activity_id,
+            serde_json::json!({
+                "agent": agent,
+                "application": application,
+                "repository_path": repository_path,
+                "external_id": external_id,
+                "source_ref": source_ref,
+                "metadata": metadata,
+            }),
+        )?),
+        Backend::Direct(s) => {
+            let activity = s.resolve_task(activity_id)?;
+            Ok(s.create_session(NewSession {
+                task_id: activity.id,
+                agent,
+                application,
+                repository_path,
+                external_id,
+                source_ref,
+                started_at: chrono::Utc::now(),
+                ended_at: None,
+                metadata_json: metadata.to_string(),
+            })?)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn checkpoints_create(
+    be: &mut Backend,
+    activity_id: &str,
+    summary: &str,
+    session_id: Option<String>,
+    decisions: Vec<String>,
+    failures: Vec<String>,
+    next_actions: Vec<String>,
+    source_ref: Option<String>,
+) -> Result<pulse_core::Checkpoint, CliError> {
+    match be {
+        Backend::Ipc(c) => Ok(c.checkpoints_create(
+            activity_id,
+            summary,
+            serde_json::json!({
+                "session_id": session_id,
+                "decisions": decisions,
+                "failures": failures,
+                "next_actions": next_actions,
+                "source_ref": source_ref,
+            }),
+        )?),
+        Backend::Direct(s) => {
+            let activity = s.resolve_task(activity_id)?;
+            let session_id = session_id
+                .map(|id| {
+                    uuid::Uuid::parse_str(&id)
+                        .map_err(|_| CliError::user("--session-id must be a UUID"))
+                })
+                .transpose()?;
+            Ok(s.create_checkpoint(NewCheckpoint {
+                task_id: activity.id,
+                session_id,
+                summary: summary.to_owned(),
+                decisions,
+                failures,
+                next_actions,
+                source_ref,
+            })?)
+        }
+    }
+}
+
+fn activities_timeline(be: &mut Backend, activity_id: &str) -> Result<serde_json::Value, CliError> {
+    match be {
+        Backend::Ipc(c) => Ok(c.activities_timeline(activity_id)?),
+        Backend::Direct(s) => {
+            let activity = s.resolve_task(activity_id)?;
+            Ok(serde_json::json!({
+                "activity": activity,
+                "evidence": s.list_evidence(activity.id)?,
+                "sessions": s.list_sessions(activity.id)?,
+                "events": s.list_events(activity.id)?,
+                "checkpoints": s.list_checkpoints(activity.id)?,
+                "reminders": s.list_reminders(activity.id)?,
+                "memories": s.list_memories(activity.id)?,
+                "artifacts": s.list_artifacts(activity.id)?,
+            }))
+        }
+    }
+}
+
+fn parse_json_arg(value: Option<String>, name: &str) -> Result<serde_json::Value, CliError> {
+    match value {
+        Some(value) => serde_json::from_str(&value)
+            .map_err(|e| CliError::user(format!("invalid --{name} JSON: {e}"))),
+        None => Ok(serde_json::json!({})),
     }
 }
 
@@ -805,10 +1052,7 @@ fn llm_status_cmd(paths: &PulsePaths) -> Result<(), CliError> {
 fn summary_generate(paths: &PulsePaths, date: Option<String>) -> Result<(), CliError> {
     let day = date.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
     if let Ok(mut c) = try_connect_from_paths(paths) {
-        let v = c.call_raw(
-            "summary.generate",
-            serde_json::json!({ "date": day }),
-        )?;
+        let v = c.call_raw("summary.generate", serde_json::json!({ "date": day }))?;
         if let Some(t) = v.get("text").and_then(|x| x.as_str()) {
             println!("{t}");
         } else {
@@ -934,8 +1178,8 @@ fn export_cmd(
     to: Option<String>,
     out: Option<PathBuf>,
 ) -> Result<(), CliError> {
-    let fmt = ExportFormat::parse(format)
-        .ok_or_else(|| CliError::user("format must be json or md"))?;
+    let fmt =
+        ExportFormat::parse(format).ok_or_else(|| CliError::user("format must be json or md"))?;
     if let Ok(mut c) = try_connect_from_paths(paths) {
         let mut params = serde_json::json!({
             "format": match fmt {
@@ -1108,10 +1352,7 @@ fn print_task_table(tasks: &[Task]) {
         println!("(no tasks)");
         return;
     }
-    println!(
-        "{:<8}  {:<8}  {:<8}  {}",
-        "ID", "STATUS", "SOURCE", "TITLE"
-    );
+    println!("{:<8}  {:<8}  {:<8}  {}", "ID", "STATUS", "SOURCE", "TITLE");
     println!("{}", "-".repeat(60));
     for t in tasks {
         println!(
@@ -1145,6 +1386,87 @@ fn print_task_detail(task: &Task) {
     println!("updated:    {}", task.updated_at.to_rfc3339());
     if let Some(c) = task.completed_at {
         println!("completed:  {}", c.to_rfc3339());
+    }
+}
+
+fn print_activity_timeline(timeline: &serde_json::Value) -> Result<(), CliError> {
+    let activity: Task = serde_json::from_value(
+        timeline
+            .get("activity")
+            .cloned()
+            .ok_or_else(|| CliError::user("timeline response missing activity"))?,
+    )
+    .map_err(|e| CliError::user(format!("decode timeline activity: {e}")))?;
+    print_task_detail(&activity);
+
+    print_timeline_section(timeline, "sessions", |row| {
+        let agent = row
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let app = row
+            .get("application")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let at = row
+            .get("started_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        format!("{at}  {agent} via {app}")
+    });
+    print_timeline_section(timeline, "events", |row| {
+        let at = row
+            .get("occurred_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let kind = row.get("kind").and_then(|v| v.as_str()).unwrap_or("event");
+        let summary = row.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+        format!("{at}  [{kind}] {summary}")
+    });
+    print_timeline_section(timeline, "checkpoints", |row| {
+        let at = row
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let summary = row.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+        format!("{at}  {summary}")
+    });
+    print_timeline_section(timeline, "reminders", |row| {
+        let due = row.get("due_at").and_then(|v| v.as_str()).unwrap_or("?");
+        let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+        let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        format!("{due}  [{status}] {title}")
+    });
+    print_timeline_section(timeline, "memories", |row| {
+        let kind = row.get("kind").and_then(|v| v.as_str()).unwrap_or("memory");
+        let content = row.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        format!("[{kind}] {content}")
+    });
+    print_timeline_section(timeline, "artifacts", |row| {
+        let kind = row
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("artifact");
+        let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        format!("[{kind}] {name}")
+    });
+    Ok(())
+}
+
+fn print_timeline_section(
+    timeline: &serde_json::Value,
+    name: &str,
+    format_row: impl Fn(&serde_json::Value) -> String,
+) {
+    let Some(rows) = timeline.get(name).and_then(|value| value.as_array()) else {
+        return;
+    };
+    if rows.is_empty() {
+        return;
+    }
+    println!("\n{}:", name[..1].to_ascii_uppercase() + &name[1..]);
+    for row in rows {
+        println!("  - {}", format_row(row));
     }
 }
 
