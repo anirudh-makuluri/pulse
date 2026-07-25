@@ -44,9 +44,11 @@ jobs:
           if ($null -eq $installer) {
             throw "NSIS installer was not produced."
           }
+          $releaseInstaller = Join-Path $env:RUNNER_TEMP "Pulse-Setup-x64.exe"
+          Copy-Item $installer.FullName $releaseInstaller
           "tag=v$($appConfig.version)-main.${{ github.run_number }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "title=Pulse v$($appConfig.version) (build ${{ github.run_number }})" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "installer=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "installer=$releaseInstaller" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Create GitHub release and upload installer
         env:

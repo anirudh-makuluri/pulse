@@ -36,11 +36,11 @@
       }
     },
     "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/henry.w@example.net",
-      "icons/icon.png",
-      "icons/icon.ico"
+      "../../../pulse-firefly-icon-pack/pulse-firefly-32.png",
+      "../../../pulse-firefly-icon-pack/pulse-firefly-128.png",
+      "../../../pulse-firefly-icon-pack/pulse-firefly-256.png",
+      "../../../pulse-firefly-icon-pack/pulse-firefly-512.png",
+      "../../../pulse-firefly-icon-pack/pulse-firefly.ico"
     ]
   }
 }
