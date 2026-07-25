@@ -679,6 +679,23 @@ impl Store {
             .ok_or_else(|| PulseError::Validation("reminder missing after update".into()))
     }
 
+    pub fn snooze_reminder(&self, id: Uuid, due_at: chrono::DateTime<Utc>) -> Result<Reminder> {
+        let reminder = self.get_reminder(id)?.ok_or_else(|| PulseError::Validation(format!("reminder not found: {id}")))?;
+        if matches!(reminder.status, ReminderStatus::Done | ReminderStatus::Cancelled) {
+            return Err(PulseError::Validation("cannot snooze a completed or cancelled reminder".into()));
+        }
+        let now = Utc::now();
+        self.conn.execute("UPDATE reminders SET due_at = ?2, status = 'snoozed', updated_at = ?3 WHERE id = ?1", params![id.to_string(), due_at.to_rfc3339(), now.to_rfc3339()])?;
+        self.get_reminder(id)?.ok_or_else(|| PulseError::Validation("reminder missing after snooze".into()))
+    }
+
+    pub fn delete_task(&self, id: Uuid) -> Result<()> {
+        if self.conn.execute("DELETE FROM tasks WHERE id = ?1", params![id.to_string()])? == 0 {
+            return Err(PulseError::TaskNotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
     pub fn create_memory(&self, new: NewMemory) -> Result<Memory> {
         self.ensure_task_exists(new.task_id)?;
         validate_nonempty(&new.kind, "memory kind")?;

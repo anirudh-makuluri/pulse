@@ -1,4 +1,5 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import {
   createTask,
   exportHistory,
@@ -8,13 +9,17 @@ import {
   getSummary,
   listTasks,
   markDone,
+  dueReminders,
+  executeOmnibox,
+  previewOmnibox,
+  reminderAction,
   privacyAcknowledge,
   serviceInfo,
   setSourceEnabled,
   setTaskStatus,
   type SettingsSnapshot,
 } from "./api";
-import type { ActivityTimeline, Task, TaskStatus } from "./types";
+import type { ActivityTimeline, Reminder, Task, TaskStatus } from "./types";
 
 type View =
   | "Inbox"
@@ -123,6 +128,13 @@ export default function App() {
   const [settings, setSettings] = useState<SettingsSnapshot | null>(null);
   const [summaryText, setSummaryText] = useState<string>("(loading…)");
   const [exportPath, setExportPath] = useState<string | null>(null);
+  const [omniboxOpen, setOmniboxOpen] = useState(false);
+  const [omniboxInput, setOmniboxInput] = useState("");
+  const [omniboxPreview, setOmniboxPreview] = useState<Awaited<ReturnType<typeof previewOmnibox>> | null>(null);
+  const [includeSelection, setIncludeSelection] = useState(false);
+  const [due, setDue] = useState<Reminder[]>([]);
+  const [omniboxBusy, setOmniboxBusy] = useState(false);
+  const notifiedDue = useRef(new Set<string>());
 
   const isTaskView = TASK_VIEWS.includes(view as (typeof TASK_VIEWS)[number]);
   const statusFilter = useMemo(
@@ -203,6 +215,65 @@ export default function App() {
       cancelled = true;
     };
   }, [selectedId, isTaskView]);
+
+  useEffect(() => {
+    const poll = () => void dueReminders().then((reminders) => {
+      const active = new Set(reminders.map((reminder) => reminder.id));
+      notifiedDue.current.forEach((id) => { if (!active.has(id)) notifiedDue.current.delete(id); });
+      const firstNew = reminders.find((reminder) => !notifiedDue.current.has(reminder.id));
+      if (firstNew) {
+        notifiedDue.current.add(firstNew.id);
+        void (async () => {
+          const allowed = await isPermissionGranted() || (await requestPermission()) === "granted";
+          if (allowed) sendNotification({ title: "Pulse reminder", body: firstNew.title });
+        })().catch(() => undefined);
+      }
+      setDue(reminders);
+    }).catch(() => undefined);
+    poll();
+    const id = window.setInterval(poll, 15000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  async function buildOmniboxPreview() {
+    if (!omniboxInput.trim()) return;
+    try {
+      setOmniboxPreview(await previewOmnibox(omniboxInput, includeSelection));
+    } catch (err) { setError(String(err)); }
+  }
+
+  async function submitOmnibox() {
+    let preview = omniboxPreview;
+    if (!preview) {
+      if (!omniboxInput.trim()) return;
+      try {
+        preview = await previewOmnibox(omniboxInput, includeSelection);
+        setOmniboxPreview(preview);
+      } catch (err) { setError(String(err)); return; }
+      if (preview.needs_context_confirmation) return;
+    }
+    setOmniboxBusy(true);
+    try {
+      const result = await executeOmnibox(omniboxInput, selectedId, preview.context);
+      setInfo(result.message);
+      if (result.task) { setSelectedId(result.task.id); setDetail(await getActivityTimeline(result.task.id)); }
+      if (result.tasks.length) setTasks(result.tasks);
+      await refreshTasks();
+      setOmniboxInput(""); setOmniboxPreview(null); setOmniboxOpen(false); setIncludeSelection(false);
+    } catch (err) { setError(String(err)); }
+    finally { setOmniboxBusy(false); }
+  }
+
+  async function actOnReminder(reminder: Reminder, action: "open_context" | "continue_coding" | "snooze" | "done") {
+    try {
+      await reminderAction(reminder.id, action);
+      if (action === "open_context" || action === "continue_coding") {
+        setSelectedId(reminder.task_id); setDetail(await getActivityTimeline(reminder.task_id));
+      }
+      setDue(await dueReminders());
+      await refreshTasks();
+    } catch (err) { setError(String(err)); }
+  }
 
   async function onAdd(e: FormEvent) {
     e.preventDefault();
@@ -560,6 +631,31 @@ export default function App() {
           </>
         )}
       </aside>
+
+      <div className="pet-shell" aria-live="polite">
+        {due.length ? (
+          <section className="reminder-card">
+            <div className="reminder-label">Reminder due</div>
+            <strong>{due[0].title}</strong>
+            <div className="reminder-actions">
+              <button onClick={() => void actOnReminder(due[0], "open_context")}>Open Context</button>
+              <button onClick={() => void actOnReminder(due[0], "continue_coding")}>Continue in Codex</button>
+              <button onClick={() => void actOnReminder(due[0], "snooze")}>Snooze</button>
+              <button className="primary" onClick={() => void actOnReminder(due[0], "done")}>Done</button>
+            </div>
+          </section>
+        ) : null}
+        {omniboxOpen ? (
+          <section className="omnibox" role="dialog" aria-label="Pulse omnibox">
+            <div className="omnibox-title">Tell Pulse what to do</div>
+            <input autoFocus value={omniboxInput} onChange={(e) => { setOmniboxInput(e.target.value); setOmniboxPreview(null); }} onKeyDown={(e) => { if (e.key === "Escape") setOmniboxOpen(false); }} placeholder="Remind me to review this in 30 minutes" />
+            <label className="capture-toggle"><input type="checkbox" checked={includeSelection} onChange={(e) => { setIncludeSelection(e.target.checked); setOmniboxPreview(null); }} /> Include copied selected text</label>
+            {omniboxPreview ? <div className="omnibox-preview"><b>{omniboxPreview.parsed.intent.replace(/_/g, " ")}</b>{omniboxPreview.parsed.due_at ? ` · ${new Date(omniboxPreview.parsed.due_at).toLocaleString()}` : null}{omniboxPreview.needs_context_confirmation ? <p>Preview: selected text will be saved only after you confirm.</p> : <p>Only this command will be saved.</p>}</div> : null}
+            <div className="omnibox-actions"><button onClick={() => void buildOmniboxPreview()} disabled={!omniboxInput.trim()}>Preview</button><button className="primary" onClick={() => void submitOmnibox()} disabled={!omniboxInput.trim() || omniboxBusy}>{omniboxPreview?.needs_context_confirmation ? "Confirm" : "Run"}</button></div>
+          </section>
+        ) : null}
+        <button className={`pet ${due.length ? "pet-due" : ""}`} onClick={() => setOmniboxOpen((open) => !open)} aria-label="Open Pulse omnibox"><span className="pet-eye" /> <span className="pet-eye" /></button>
+      </div>
     </div>
   );
 }

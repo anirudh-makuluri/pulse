@@ -7,6 +7,7 @@ pub mod dedup;
 pub mod error;
 pub mod export;
 pub mod ipc;
+pub mod intent;
 pub mod models;
 pub mod paths;
 pub mod state;
@@ -23,6 +24,7 @@ pub use export::{export_history, ExportFormat};
 pub use ipc::{
     live_service_pid, try_connect, write_pid_file, IpcClient, RpcHandler, ServicePidFile,
 };
+pub use intent::{parse_omnibox, parse_relative_time, OmniboxIntent, ParsedOmniboxIntent};
 pub use models::*;
 pub use paths::{default_data_dir, PulsePaths};
 pub use state::{can_transition, validate_transition};

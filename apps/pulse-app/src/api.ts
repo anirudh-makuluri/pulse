@@ -1,5 +1,38 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ActivityTimeline, Task, TaskDetail, TaskStatus } from "./types";
+import type { ActivityTimeline, Reminder, Task, TaskDetail, TaskStatus } from "./types";
+
+export interface ContextEnvelope {
+  active_app: string | null;
+  window_title: string | null;
+  selected_text: string | null;
+  captured_at: string;
+}
+
+export interface OmniboxPreview {
+  parsed: { intent: string; raw: string; subject: string; due_at: string | null };
+  context: ContextEnvelope;
+  needs_context_confirmation: boolean;
+}
+
+export interface OmniboxResult {
+  message: string;
+  task: Task | null;
+  reminder: Reminder | null;
+  tasks: Task[];
+}
+
+export async function previewOmnibox(input: string, includeSelectedText: boolean): Promise<OmniboxPreview> {
+  return invoke("preview_omnibox", { input, includeSelectedText });
+}
+
+export async function executeOmnibox(input: string, selectedTaskId: string | null, context: ContextEnvelope): Promise<OmniboxResult> {
+  return invoke("execute_omnibox", { input, selectedTaskId, context });
+}
+
+export async function dueReminders(): Promise<Reminder[]> { return invoke("due_reminders"); }
+export async function reminderAction(id: string, action: "open_context" | "continue_coding" | "snooze" | "done"): Promise<Reminder> {
+  return invoke("reminder_action", { id, action });
+}
 
 export async function listTasks(status?: TaskStatus): Promise<Task[]> {
   return invoke<Task[]>("list_tasks", { status: status ?? null });

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use std::collections::HashMap;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
@@ -91,6 +92,7 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
 
     // Start source inference poller (PR4: heuristic only).
     let pipeline = pipeline::start_pipeline(Arc::clone(&store), Arc::clone(&config), 30);
+    let reminder_scheduler = start_reminder_scheduler(Arc::clone(&store));
 
     if !quiet {
         eprintln!(
@@ -106,9 +108,54 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
     let result = pipe::serve_loop(&pipe_name, handler, shutdown);
 
     pipeline.stop();
+    reminder_scheduler.stop();
     let _ = remove_pid_file_if_matches(&paths.service_pid_path(), state.pid, Some(&exe_path));
     result?;
     Ok(())
+}
+
+/// Local-only reminder scheduler. A due item is recorded once per daemon run
+/// and surfaced by the desktop pet, which owns the user-visible actions.
+fn start_reminder_scheduler(store: Arc<Mutex<Store>>) -> ReminderScheduler {
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        // Keep the scheduled timestamp, rather than merely the reminder id: a
+        // snoozed reminder is deliberately eligible to fire again at its new time.
+        let mut surfaced = HashMap::new();
+        while !worker_stop.load(Ordering::SeqCst) {
+            if let Ok(store) = store.lock() {
+                if let Ok(reminders) = store.list_due_reminders(Utc::now()) {
+                    for reminder in reminders {
+                        if surfaced.get(&reminder.id) != Some(&reminder.due_at) {
+                            surfaced.insert(reminder.id, reminder.due_at);
+                            let payload = json!({
+                                "reminder_id": reminder.id,
+                                "actions": ["open_context", "continue_coding", "snooze", "done"],
+                            }).to_string();
+                            let _ = store.record_event(pulse_core::NewActivityEvent {
+                                task_id: reminder.task_id,
+                                session_id: None,
+                                kind: "reminder_due".into(),
+                                summary: format!("Reminder due: {}", reminder.title),
+                                payload_json: Some(payload),
+                                source_ref: Some("local_scheduler".into()),
+                                occurred_at: Utc::now(),
+                            });
+                            eprintln!("pulse reminder due: {}", reminder.title);
+                        }
+                    }
+                }
+            }
+            for _ in 0..10 { if worker_stop.load(Ordering::SeqCst) { break; } thread::sleep(Duration::from_secs(1)); }
+        }
+    });
+    ReminderScheduler { stop, handle: Some(handle) }
+}
+
+struct ReminderScheduler { stop: Arc<AtomicBool>, handle: Option<thread::JoinHandle<()>> }
+impl ReminderScheduler {
+    fn stop(mut self) { self.stop.store(true, Ordering::SeqCst); if let Some(handle) = self.handle.take() { let _ = handle.join(); } }
 }
 
 struct ServiceState {
