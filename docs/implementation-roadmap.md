@@ -37,16 +37,21 @@ cross-agent activity and memory layer.
 
 ## Workstream 4: CockroachDB memory
 
-13. [ ] Provision and configure CockroachDB, then create the cloud schema for
+13. [x] Provision and configure CockroachDB, then create the cloud schema for
     durable Pulse memory.
-14. [ ] Implement an opt-in sync queue from local SQLite to the cloud activity
-    graph.
-15. [ ] Add local embedding-provider support, preferring Ollama or another
-    configured local embedding tool.
-16. [ ] Store vectors in CockroachDB and implement semantic retrieval for
-    activities, decisions, failures, and reminders.
-17. [ ] Configure CockroachDB Managed MCP Server for read-only agent access to
-    Pulse memory.
+14. [x] Implement an opt-in sync queue from local SQLite to the cloud activity
+    graph. The durable local outbox and retry worker are complete; its HTTPS
+    sync API is the remaining Workstream 5 dependency.
+15. [x] Add local embedding-provider support, preferring Ollama or another
+    configured local embedding tool. Pulse uses local Hugging Face MiniLM ONNX
+    inference with 384-dimensional vectors.
+16. [x] Create the CockroachDB embedding schema and cosine vector index for
+    384-dimensional local MiniLM vectors.
+
+**Current checkpoint (2026-07-26):** `defaultdb` on the CockroachDB Basic
+cluster contains the Pulse activity, timeline, memory, artifact, and
+`VECTOR(384)` embedding tables, including a cosine vector index. Embedding
+storage and semantic retrieval remain to be implemented.
 
 ## Workstream 5: AWS durability layer
 
@@ -58,20 +63,23 @@ cross-agent activity and memory layer.
     continue working offline.
 21. [ ] Add a minimal deployment and configuration path, including environment
     variable documentation.
+22. [ ] Implement the end-to-end vector flow: generate approved local MiniLM
+    embeddings for activities, checkpoints, memories, and reminders; sync them
+    through Lambda; and expose cosine semantic retrieval.
 
 ## Workstream 6: continuity layer
 
-22. [ ] Add structured checkpoint recording through a Pulse tool, skill, or
+23. [ ] Add structured checkpoint recording through a Pulse tool, skill, or
     CLI.
-23. [ ] Implement task resolution and structured handoff-package generation using
+24. [ ] Implement task resolution and structured handoff-package generation using
     the configured local agent provider.
 
 ## Workstream 7: Demo and submission
 
-24. [ ] Seed a deterministic authentication-refactor demo activity.
-25. [ ] Demonstrate vector retrieval and Managed MCP Server queries.
-26. [ ] Demonstrate offline queueing followed by cloud sync.
-27. [ ] Update the README, architecture diagram, setup guide, license, demo script,
+25. [ ] Seed a deterministic authentication-refactor demo activity.
+26. [ ] Demonstrate vector retrieval through the Pulse sync API.
+27. [ ] Demonstrate offline queueing followed by cloud sync.
+28. [ ] Update the README, architecture diagram, setup guide, license, demo script,
     and video checklist.
 
 ## Recommended implementation order

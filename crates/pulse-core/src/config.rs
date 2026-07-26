@@ -18,6 +18,8 @@ pub struct Config {
     #[serde(default)]
     pub sync: SyncConfig,
     #[serde(default)]
+    pub embeddings: EmbeddingsConfig,
+    #[serde(default)]
     pub privacy: PrivacyConfig,
 }
 
@@ -29,6 +31,7 @@ impl Default for Config {
             inference: InferenceConfig::default(),
             sources: SourcesConfig::default(),
             sync: SyncConfig::default(),
+            embeddings: EmbeddingsConfig::default(),
             privacy: PrivacyConfig::default(),
         }
     }
@@ -221,6 +224,12 @@ pub struct SyncConfig {
     /// only explicitly approved large artifacts; it never enables sync itself.
     #[serde(default)]
     pub artifact_bucket: Option<String>,
+    /// Environment variable containing the bearer token for the sync API. The
+    /// token itself is never written to config.toml.
+    #[serde(default = "default_sync_token_env")]
+    pub token_env: String,
+    #[serde(default = "default_sync_batch_size")]
+    pub batch_size: u32,
 }
 
 impl Default for SyncConfig {
@@ -229,6 +238,52 @@ impl Default for SyncConfig {
             enabled: false,
             endpoint: None,
             artifact_bucket: None,
+            token_env: default_sync_token_env(),
+            batch_size: default_sync_batch_size(),
+        }
+    }
+}
+
+fn default_sync_token_env() -> String {
+    "PULSE_SYNC_TOKEN".into()
+}
+fn default_sync_batch_size() -> u32 {
+    50
+}
+
+/// Local embedding generation. Pulse downloads the selected open model once,
+/// then performs inference on-device; it does not use a cloud-sync credential.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EmbeddingsConfig {
+    /// "none" | "huggingface_onnx"
+    #[serde(default = "default_embedding_provider")]
+    pub provider: String,
+    #[serde(default = "default_embedding_model")]
+    pub model: String,
+    #[serde(default = "default_embedding_dimensions")]
+    pub dimensions: u32,
+    /// Optional model-cache location. Defaults to `%LOCALAPPDATA%\\Pulse\\models`.
+    #[serde(default)]
+    pub cache_dir: Option<String>,
+}
+
+fn default_embedding_provider() -> String {
+    "huggingface_onnx".into()
+}
+fn default_embedding_model() -> String {
+    "sentence-transformers/all-MiniLM-L6-v2".into()
+}
+fn default_embedding_dimensions() -> u32 {
+    384
+}
+
+impl Default for EmbeddingsConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_embedding_provider(),
+            model: default_embedding_model(),
+            dimensions: default_embedding_dimensions(),
+            cache_dir: None,
         }
     }
 }
@@ -311,11 +366,23 @@ impl Config {
             ));
         }
         if self.service.pipe_name.trim().is_empty() {
-            return Err(PulseError::Config("service.pipe_name must not be empty".into()));
+            return Err(PulseError::Config(
+                "service.pipe_name must not be empty".into(),
+            ));
         }
         if self.sync.enabled && self.sync.endpoint.is_none() {
             return Err(PulseError::Config(
                 "sync.endpoint is required when sync.enabled is true".into(),
+            ));
+        }
+        if self.sync.token_env.trim().is_empty() {
+            return Err(PulseError::Config(
+                "sync.token_env must not be empty".into(),
+            ));
+        }
+        if self.sync.batch_size == 0 || self.sync.batch_size > 500 {
+            return Err(PulseError::Config(
+                "sync.batch_size must be in 1..=500".into(),
             ));
         }
         if let Some(endpoint) = &self.sync.endpoint {
@@ -334,6 +401,16 @@ impl Config {
         {
             return Err(PulseError::Config(
                 "sync.artifact_bucket must not be empty when provided".into(),
+            ));
+        }
+        if !matches!(self.embeddings.provider.as_str(), "none" | "huggingface_onnx") {
+            return Err(PulseError::Config(
+                "embeddings.provider must be none or huggingface_onnx".into(),
+            ));
+        }
+        if self.embeddings.model.trim().is_empty() || self.embeddings.dimensions == 0 {
+            return Err(PulseError::Config(
+                "embeddings.model must not be empty and dimensions must be > 0".into(),
             ));
         }
         Ok(())
@@ -405,6 +482,8 @@ mod tests {
         assert!(!cfg.privacy.acknowledge_remote_llm);
         assert!(!cfg.sources.claude.enabled);
         assert!(!cfg.sync.enabled);
+        assert_eq!(cfg.embeddings.provider, "huggingface_onnx");
+        assert_eq!(cfg.embeddings.dimensions, 384);
     }
 
     #[test]
@@ -483,5 +562,11 @@ artifact_bucket = "pulse-artifacts"
         .unwrap();
         assert!(cfg.sync.enabled);
         assert_eq!(cfg.sync.artifact_bucket.as_deref(), Some("pulse-artifacts"));
+    }
+
+    #[test]
+    fn embedding_config_rejects_an_unknown_provider() {
+        let err = parse_str("[embeddings]\nprovider = \"remote\"").unwrap_err();
+        assert!(err.to_string().contains("embeddings.provider"));
     }
 }

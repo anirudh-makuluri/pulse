@@ -5,10 +5,11 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{PulseError, Result};
 
 /// Highest migration version this binary knows how to apply.
-pub const LATEST_SCHEMA_VERSION: i64 = 2;
+pub const LATEST_SCHEMA_VERSION: i64 = 3;
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../migrations/002_activity_timeline.sql");
+const MIGRATION_003: &str = include_str!("../migrations/003_sync_outbox.sql");
 
 /// Open (or create) the SQLite database, enable pragmas, apply migrations.
 pub fn open(path: &Path) -> Result<Connection> {
@@ -61,6 +62,15 @@ fn migrate(conn: &Connection) -> Result<()> {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
             [2i64],
+        )?;
+        tx.commit()?;
+    }
+    if current < 3 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_003)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
+            [3i64],
         )?;
         tx.commit()?;
     }
@@ -138,6 +148,7 @@ mod tests {
             "reminders",
             "memories",
             "artifacts",
+            "sync_outbox",
         ] {
             let exists: bool = conn
                 .query_row(
@@ -166,11 +177,11 @@ mod tests {
         assert_eq!(current_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'events', 'checkpoints', 'reminders', 'memories', 'artifacts')",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'events', 'checkpoints', 'reminders', 'memories', 'artifacts', 'sync_outbox')",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 6);
+        assert_eq!(count, 7);
     }
 }

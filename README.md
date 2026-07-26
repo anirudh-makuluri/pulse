@@ -54,15 +54,17 @@ Pulse is designed to be useful offline.
   installed on your `PATH`.
 - Remote CLI-backed inference requires an explicit privacy acknowledgement;
   otherwise Pulse uses local heuristics.
-- Cloud sync is planned as an opt-in feature. It is not required for local
-  tasks, reminders, or the desktop app.
+- Cloud sync is an opt-in feature currently being built. It is not required
+  for local tasks, reminders, or the desktop app.
 
 ## Product direction
 
-The local activity timeline is complete. The next milestone is the **pet
-omnibox and reminders** interaction: quick task actions, context preview,
-reminder notifications, and clear handoffs back into an agent. Later work adds
-opt-in CockroachDB memory, an AWS durability layer, and structured continuity
+The local activity timeline, pet omnibox, and reminder experience are complete.
+Pulse now supports quick task actions, a preview before selected text is saved,
+local reminder notifications, and clear handoffs back into an agent. The next
+milestone is **opt-in CockroachDB memory**: the CockroachDB schema, vector
+index, local MiniLM embeddings, and durable local outbox are ready. Next comes
+the AWS sync API and semantic retrieval. Later work adds structured continuity
 between agents.
 
 | Area | Status |
@@ -70,12 +72,13 @@ between agents.
 | Local activity timeline and desktop task detail | Complete |
 | SQLite, CLI, background service, and named-pipe IPC | Complete |
 | Claude/Codex sources and agent-CLI summaries | Complete |
-| Pet omnibox and reminder experience | In progress |
-| Opt-in cloud memory and sync | Planned |
+| Pet omnibox and reminder experience | Complete |
+| Opt-in cloud memory and sync | In progress |
 | Cross-agent handoff packages | Planned |
 
 See the [implementation roadmap](docs/implementation-roadmap.md) for the full
-workstream and acceptance criteria.
+workstream and acceptance criteria. Developers preparing the next cloud-memory
+milestone can follow the [CockroachDB memory setup](docs/cloud-memory-setup.md).
 
 ## How it fits together
 

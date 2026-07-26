@@ -227,4 +227,3 @@ fn run_with_timeout(
 pub fn mock_client(bin: impl Into<PathBuf>, kind: CliBackendKind) -> CliLlmClient {
     CliLlmClient::new(kind, bin.into(), 30, None)
 }
-

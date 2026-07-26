@@ -16,6 +16,7 @@ pub mod store;
 pub use checkin::{apply_checkin_answer, parse_answer_input};
 pub use config::{
     load as load_config, parse_str as parse_config_str, write_atomic as write_config, Config,
+    EmbeddingsConfig,
 };
 pub use db::{open as open_db, open_in_memory, LATEST_SCHEMA_VERSION};
 pub use dedup::{compute_dedup_key, normalize_title};

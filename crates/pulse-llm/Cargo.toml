@@ -6,6 +6,7 @@ license.workspace = true
 description = "LLM clients and heuristic fallback for Pulse"
 
 [dependencies]
+fastembed = "5.17"
 pulse-core = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }

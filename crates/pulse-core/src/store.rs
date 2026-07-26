@@ -6,8 +6,8 @@ use crate::error::{PulseError, Result};
 use crate::models::{
     ActivityEvent, Artifact, CheckIn, CheckInKind, CheckInStatus, Checkpoint, Evidence, Memory,
     NewActivityEvent, NewArtifact, NewCheckIn, NewCheckpoint, NewEvidence, NewMemory, NewReminder,
-    NewSession, NewTask, Reminder, ReminderStatus, Session, SourceWatermark, Summary, Task,
-    TaskSource, TaskStatus, TaskUpdate,
+    NewSession, NewTask, Reminder, ReminderStatus, Session, SourceWatermark, Summary,
+    SyncOutboxItem, Task, TaskSource, TaskStatus, TaskUpdate,
 };
 use crate::state::validate_transition;
 
@@ -78,8 +78,11 @@ impl Store {
             ],
         )?;
 
-        self.get_task(id)?
-            .ok_or_else(|| PulseError::TaskNotFound(id.to_string()))
+        let task = self
+            .get_task(id)?
+            .ok_or_else(|| PulseError::TaskNotFound(id.to_string()))?;
+        self.enqueue_sync_upsert("activity", task.id, &task)?;
+        Ok(task)
     }
 
     pub fn get_task(&self, id: Uuid) -> Result<Option<Task>> {
@@ -201,6 +204,7 @@ impl Store {
             ],
         )?;
 
+        self.enqueue_sync_upsert("activity", task.id, &task)?;
         Ok(task)
     }
 
@@ -550,8 +554,11 @@ impl Store {
                 new.metadata_json
             ],
         )?;
-        self.get_session(id)?
-            .ok_or_else(|| PulseError::Validation("session missing after insert".into()))
+        let session = self
+            .get_session(id)?
+            .ok_or_else(|| PulseError::Validation("session missing after insert".into()))?;
+        self.enqueue_sync_upsert("session", session.id, &session)?;
+        Ok(session)
     }
 
     pub fn get_session(&self, id: Uuid) -> Result<Option<Session>> {
@@ -583,8 +590,11 @@ impl Store {
             params![id.to_string(), new.task_id.to_string(), new.session_id.map(|v| v.to_string()),
                 new.kind, new.summary, new.payload_json, new.source_ref, new.occurred_at.to_rfc3339(), created_at.to_rfc3339()],
         )?;
-        self.get_event(id)?
-            .ok_or_else(|| PulseError::Validation("event missing after insert".into()))
+        let event = self
+            .get_event(id)?
+            .ok_or_else(|| PulseError::Validation("event missing after insert".into()))?;
+        self.enqueue_sync_upsert("event", event.id, &event)?;
+        Ok(event)
     }
 
     pub fn get_event(&self, id: Uuid) -> Result<Option<ActivityEvent>> {
@@ -616,8 +626,11 @@ impl Store {
             params![id.to_string(), new.task_id.to_string(), new.session_id.map(|v| v.to_string()),
                 new.summary, decisions, failures, next_actions, new.source_ref, created_at.to_rfc3339()],
         )?;
-        self.get_checkpoint(id)?
-            .ok_or_else(|| PulseError::Validation("checkpoint missing after insert".into()))
+        let checkpoint = self
+            .get_checkpoint(id)?
+            .ok_or_else(|| PulseError::Validation("checkpoint missing after insert".into()))?;
+        self.enqueue_sync_upsert("checkpoint", checkpoint.id, &checkpoint)?;
+        Ok(checkpoint)
     }
 
     pub fn get_checkpoint(&self, id: Uuid) -> Result<Option<Checkpoint>> {
@@ -639,8 +652,11 @@ impl Store {
             "INSERT INTO reminders (id, task_id, title, due_at, status, context_json, created_at, updated_at, completed_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, NULL)",
             params![id.to_string(), new.task_id.to_string(), new.title, new.due_at.to_rfc3339(), new.context_json, now.to_rfc3339(), now.to_rfc3339()],
         )?;
-        self.get_reminder(id)?
-            .ok_or_else(|| PulseError::Validation("reminder missing after insert".into()))
+        let reminder = self
+            .get_reminder(id)?
+            .ok_or_else(|| PulseError::Validation("reminder missing after insert".into()))?;
+        self.enqueue_sync_upsert("reminder", reminder.id, &reminder)?;
+        Ok(reminder)
     }
 
     pub fn get_reminder(&self, id: Uuid) -> Result<Option<Reminder>> {
@@ -675,24 +691,46 @@ impl Store {
         if changed == 0 {
             return Err(PulseError::Validation(format!("reminder not found: {id}")));
         }
-        self.get_reminder(id)?
-            .ok_or_else(|| PulseError::Validation("reminder missing after update".into()))
+        let reminder = self
+            .get_reminder(id)?
+            .ok_or_else(|| PulseError::Validation("reminder missing after update".into()))?;
+        self.enqueue_sync_upsert("reminder", reminder.id, &reminder)?;
+        Ok(reminder)
     }
 
     pub fn snooze_reminder(&self, id: Uuid, due_at: chrono::DateTime<Utc>) -> Result<Reminder> {
-        let reminder = self.get_reminder(id)?.ok_or_else(|| PulseError::Validation(format!("reminder not found: {id}")))?;
-        if matches!(reminder.status, ReminderStatus::Done | ReminderStatus::Cancelled) {
-            return Err(PulseError::Validation("cannot snooze a completed or cancelled reminder".into()));
+        let reminder = self
+            .get_reminder(id)?
+            .ok_or_else(|| PulseError::Validation(format!("reminder not found: {id}")))?;
+        if matches!(
+            reminder.status,
+            ReminderStatus::Done | ReminderStatus::Cancelled
+        ) {
+            return Err(PulseError::Validation(
+                "cannot snooze a completed or cancelled reminder".into(),
+            ));
         }
         let now = Utc::now();
-        self.conn.execute("UPDATE reminders SET due_at = ?2, status = 'snoozed', updated_at = ?3 WHERE id = ?1", params![id.to_string(), due_at.to_rfc3339(), now.to_rfc3339()])?;
-        self.get_reminder(id)?.ok_or_else(|| PulseError::Validation("reminder missing after snooze".into()))
+        self.conn.execute(
+            "UPDATE reminders SET due_at = ?2, status = 'snoozed', updated_at = ?3 WHERE id = ?1",
+            params![id.to_string(), due_at.to_rfc3339(), now.to_rfc3339()],
+        )?;
+        let reminder = self
+            .get_reminder(id)?
+            .ok_or_else(|| PulseError::Validation("reminder missing after snooze".into()))?;
+        self.enqueue_sync_upsert("reminder", reminder.id, &reminder)?;
+        Ok(reminder)
     }
 
     pub fn delete_task(&self, id: Uuid) -> Result<()> {
-        if self.conn.execute("DELETE FROM tasks WHERE id = ?1", params![id.to_string()])? == 0 {
+        if self
+            .conn
+            .execute("DELETE FROM tasks WHERE id = ?1", params![id.to_string()])?
+            == 0
+        {
             return Err(PulseError::TaskNotFound(id.to_string()));
         }
+        self.enqueue_sync_delete("activity", id)?;
         Ok(())
     }
 
@@ -704,8 +742,11 @@ impl Store {
         let id = Uuid::new_v4();
         let now = Utc::now();
         self.conn.execute("INSERT INTO memories (id, task_id, checkpoint_id, kind, content, provenance_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![id.to_string(), new.task_id.to_string(), new.checkpoint_id.map(|v| v.to_string()), new.kind, new.content, new.provenance_json, now.to_rfc3339(), now.to_rfc3339()])?;
-        self.get_memory(id)?
-            .ok_or_else(|| PulseError::Validation("memory missing after insert".into()))
+        let memory = self
+            .get_memory(id)?
+            .ok_or_else(|| PulseError::Validation("memory missing after insert".into()))?;
+        self.enqueue_sync_upsert("memory", memory.id, &memory)?;
+        Ok(memory)
     }
 
     pub fn get_memory(&self, id: Uuid) -> Result<Option<Memory>> {
@@ -730,8 +771,11 @@ impl Store {
         let id = Uuid::new_v4();
         let created_at = Utc::now();
         self.conn.execute("INSERT INTO artifacts (id, task_id, session_id, kind, name, local_path, content_type, size_bytes, checksum, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", params![id.to_string(), new.task_id.to_string(), new.session_id.map(|v| v.to_string()), new.kind, new.name, new.local_path, new.content_type, new.size_bytes, new.checksum, new.metadata_json, created_at.to_rfc3339()])?;
-        self.get_artifact(id)?
-            .ok_or_else(|| PulseError::Validation("artifact missing after insert".into()))
+        let artifact = self
+            .get_artifact(id)?
+            .ok_or_else(|| PulseError::Validation("artifact missing after insert".into()))?;
+        self.enqueue_sync_upsert("artifact", artifact.id, &artifact)?;
+        Ok(artifact)
     }
 
     pub fn get_artifact(&self, id: Uuid) -> Result<Option<Artifact>> {
@@ -740,6 +784,96 @@ impl Store {
 
     pub fn list_artifacts(&self, task_id: Uuid) -> Result<Vec<Artifact>> {
         self.list_timeline_rows("SELECT id, task_id, session_id, kind, name, local_path, content_type, size_bytes, checksum, metadata_json, created_at FROM artifacts WHERE task_id = ?1 ORDER BY created_at DESC", task_id, map_artifact)
+    }
+
+    /// Return a bounded batch of undelivered sync records that are eligible to
+    /// retry. Keeping this local means task creation and reminders never wait
+    /// on a network request.
+    pub fn list_pending_sync(
+        &self,
+        limit: u32,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Vec<SyncOutboxItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, record_type, record_id, operation, payload_json, created_at, attempt_count, next_attempt_at, last_error FROM sync_outbox WHERE delivered_at IS NULL AND next_attempt_at <= ?1 ORDER BY created_at ASC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![now.to_rfc3339(), i64::from(limit)], map_sync_outbox)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn pending_sync_count(&self) -> Result<i64> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM sync_outbox WHERE delivered_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn mark_sync_delivered(
+        &self,
+        ids: &[Uuid],
+        delivered_at: chrono::DateTime<Utc>,
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for id in ids {
+            tx.execute(
+                "UPDATE sync_outbox SET delivered_at = ?2, last_error = NULL WHERE id = ?1",
+                params![id.to_string(), delivered_at.to_rfc3339()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_sync_failed(
+        &self,
+        id: Uuid,
+        error: &str,
+        retry_at: chrono::DateTime<Utc>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sync_outbox SET attempt_count = attempt_count + 1, last_error = ?2, next_attempt_at = ?3 WHERE id = ?1",
+            params![id.to_string(), truncate_sync_error(error), retry_at.to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    fn enqueue_sync_upsert<T: serde::Serialize>(
+        &self,
+        record_type: &str,
+        record_id: Uuid,
+        record: &T,
+    ) -> Result<()> {
+        let payload_json = serde_json::to_string(record)
+            .map_err(|e| PulseError::Validation(format!("serialize sync payload: {e}")))?;
+        self.enqueue_sync(record_type, record_id, "upsert", &payload_json)
+    }
+
+    fn enqueue_sync_delete(&self, record_type: &str, record_id: Uuid) -> Result<()> {
+        self.enqueue_sync(
+            record_type,
+            record_id,
+            "delete",
+            &serde_json::json!({ "id": record_id }).to_string(),
+        )
+    }
+
+    fn enqueue_sync(
+        &self,
+        record_type: &str,
+        record_id: Uuid,
+        operation: &str,
+        payload_json: &str,
+    ) -> Result<()> {
+        let now = Utc::now();
+        self.conn.execute(
+            "INSERT INTO sync_outbox (id, record_type, record_id, operation, payload_json, created_at, next_attempt_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![Uuid::new_v4().to_string(), record_type, record_id.to_string(), operation, payload_json, now.to_rfc3339(), now.to_rfc3339()],
+        )?;
+        Ok(())
     }
 
     fn ensure_task_exists(&self, task_id: Uuid) -> Result<()> {
@@ -1007,6 +1141,20 @@ fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     })
 }
 
+fn map_sync_outbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<SyncOutboxItem> {
+    Ok(SyncOutboxItem {
+        id: parse_uuid(row.get(0)?)?,
+        record_type: row.get(1)?,
+        record_id: parse_uuid(row.get(2)?)?,
+        operation: row.get(3)?,
+        payload_json: row.get(4)?,
+        created_at: parse_dt(&row.get::<_, String>(5)?)?,
+        attempt_count: row.get(6)?,
+        next_attempt_at: parse_dt(&row.get::<_, String>(7)?)?,
+        last_error: row.get(8)?,
+    })
+}
+
 fn parse_uuid(s: String) -> rusqlite::Result<Uuid> {
     Uuid::parse_str(&s).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -1036,6 +1184,11 @@ fn parse_json_vec(value: &str) -> rusqlite::Result<Vec<String>> {
 
 fn bad_value(column: usize, message: String) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, message.into())
+}
+
+fn truncate_sync_error(error: &str) -> String {
+    const MAX_LEN: usize = 1024;
+    error.chars().take(MAX_LEN).collect()
 }
 
 struct DateTimeParse<'a>(&'a str);
@@ -1275,5 +1428,24 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(err, PulseError::Validation(_)));
+    }
+
+    #[test]
+    fn activity_changes_enter_the_durable_sync_outbox() {
+        let store = store();
+        let task = store
+            .create_task(NewTask::manual("Queue this activity"))
+            .unwrap();
+
+        let pending = store.list_pending_sync(10, Utc::now()).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].record_type, "activity");
+        assert_eq!(pending[0].record_id, task.id);
+        assert_eq!(pending[0].operation, "upsert");
+
+        store
+            .mark_sync_delivered(&[pending[0].id], Utc::now())
+            .unwrap();
+        assert_eq!(store.pending_sync_count().unwrap(), 0);
     }
 }

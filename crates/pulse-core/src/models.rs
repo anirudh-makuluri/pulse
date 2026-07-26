@@ -441,3 +441,18 @@ pub struct NewArtifact {
     pub checksum: Option<String>,
     pub metadata_json: String,
 }
+
+/// A local record waiting to be accepted by the opt-in cloud sync endpoint.
+/// Payloads are structured snapshots, not raw transcript files or artifacts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncOutboxItem {
+    pub id: Uuid,
+    pub record_type: String,
+    pub record_id: Uuid,
+    pub operation: String,
+    pub payload_json: String,
+    pub created_at: DateTime<Utc>,
+    pub attempt_count: i64,
+    pub next_attempt_at: DateTime<Utc>,
+    pub last_error: Option<String>,
+}

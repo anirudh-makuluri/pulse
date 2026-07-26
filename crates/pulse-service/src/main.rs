@@ -93,6 +93,8 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
     // Start source inference poller (PR4: heuristic only).
     let pipeline = pipeline::start_pipeline(Arc::clone(&store), Arc::clone(&config), 30);
     let reminder_scheduler = start_reminder_scheduler(Arc::clone(&store));
+    let sync_worker =
+        pulse_service::sync::start_sync_worker(Arc::clone(&store), Arc::clone(&config));
 
     if !quiet {
         eprintln!(
@@ -109,6 +111,7 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
 
     pipeline.stop();
     reminder_scheduler.stop();
+    sync_worker.stop();
     let _ = remove_pid_file_if_matches(&paths.service_pid_path(), state.pid, Some(&exe_path));
     result?;
     Ok(())
@@ -188,7 +191,7 @@ impl RpcHandler for ServiceState {
                     "llm_path": st.path,
                     "llm_reason": st.reason,
                     "privacy_ack": st.privacy_ack,
-                    "queue_depth": 0,
+                    "queue_depth": self.store.lock().ok().and_then(|store| store.pending_sync_count().ok()).unwrap_or(0),
                     "sources": {
                         "claude": cfg.sources.claude.enabled,
                         "codex": cfg.sources.codex.enabled,
