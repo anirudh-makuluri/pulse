@@ -2810,6 +2810,7 @@ name = "pulse-app"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "notify-rust",
  "pulse-core",
  "pulse-llm",
  "serde",

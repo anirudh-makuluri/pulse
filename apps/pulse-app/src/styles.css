@@ -432,6 +432,91 @@ input {
   pointer-events: none;
 }
 
+.pet-window,
+.pet-window body,
+.pet-window #root {
+  background: transparent;
+}
+
+.pet-app {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.pet-app.pet-expanded {
+  padding: 0;
+}
+
+.pet-app .pet-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  width: 100%;
+}
+
+.pet-app:not(.pet-expanded) .pet-row {
+  justify-content: center;
+}
+
+.pet-app.pet-expanded > .omnibox,
+.pet-app.pet-expanded > .reminder-card,
+.pet-app.pet-expanded > .pet-results {
+  width: calc(100% - 24px);
+  margin-right: 12px;
+}
+
+.pet-app .pet {
+  flex: 0 0 auto;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.pet-app .pet img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.pet-results {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #40517d;
+  border-radius: 14px;
+  background: #151d34;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, .42);
+}
+
+.pet-status {
+  width: 100%;
+  color: #ffc9c9;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.pet-results button {
+  width: 100%;
+  overflow: hidden;
+  margin-top: 5px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pet-shell > * { pointer-events: auto; }
 
 .pet {
@@ -446,6 +531,15 @@ input {
   justify-content: center;
   align-items: center;
   gap: 7px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.pet img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .pet-eye { width: 7px; height: 10px; border-radius: 50%; background: #101735; box-shadow: 0 0 0 2px rgba(255,255,255,.22); }
@@ -462,10 +556,11 @@ input {
 }
 .omnibox-title, .reminder-label { margin-bottom: 10px; color: #b5cbff; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
 .omnibox input { box-sizing: border-box; width: 100%; padding: 10px 11px; border: 1px solid #52648f; border-radius: 8px; background: #0e1528; color: #edf3ff; }
+.omnibox-hint { margin: 8px 0; color: var(--muted); font-size: 11px; }
 .capture-toggle { display: block; margin: 10px 0; color: var(--muted); font-size: 12px; }
 .omnibox-preview { margin: 10px 0; padding: 9px; border-radius: 8px; background: rgba(107, 140, 225, .11); color: #dce6ff; font-size: 12px; }
 .omnibox-preview p { margin: 6px 0 0; color: var(--muted); }
-.omnibox-actions, .reminder-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.omnibox-actions, .reminder-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
 .reminder-card strong { display: block; margin: 2px 0 11px; color: #f1f5ff; }
 .reminder-actions button { font-size: 12px; padding: 6px 8px; }
 

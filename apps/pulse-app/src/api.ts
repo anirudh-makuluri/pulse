@@ -34,6 +34,22 @@ export async function reminderAction(id: string, action: "open_context" | "conti
   return invoke("reminder_action", { id, action });
 }
 
+export async function openTaskContext(taskId: string, mode: "open_context" | "continue_coding"): Promise<void> {
+  return invoke("open_task_context", { taskId, mode });
+}
+
+export async function setPetExpanded(expanded: boolean): Promise<void> {
+  return invoke("set_pet_expanded", { expanded });
+}
+
+export async function showMainWindow(): Promise<void> {
+  return invoke("show_main_window");
+}
+
+export async function showPetContextMenu(): Promise<void> {
+  return invoke("show_pet_context_menu");
+}
+
 export async function listTasks(status?: TaskStatus): Promise<Task[]> {
   return invoke<Task[]>("list_tasks", { status: status ?? null });
 }

@@ -12,11 +12,27 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Pulse",
         "width": 1180,
         "height": 760,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "visible": false
+      },
+      {
+        "label": "pet",
+        "title": "Pulse pet",
+        "width": 68,
+        "height": 68,
+        "minWidth": 68,
+        "minHeight": 68,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false
       }
     ],
     "security": {

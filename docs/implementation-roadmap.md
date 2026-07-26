@@ -27,12 +27,12 @@ cross-agent activity and memory layer.
 
 ## Workstream 3: Pet omnibox and reminders
 
-9. [ ] Build the bottom-right pet shell and omnibox interaction.
-10. [ ] Add deterministic intent handling for task CRUD, search, reminders, and
+9. [x] Build the bottom-right pet shell and omnibox interaction.
+10. [x] Add deterministic intent handling for task CRUD, search, reminders, and
     resume or handoff requests.
-11. [ ] Add active-window and selected-text context capture, with a preview before
+11. [x] Add active-window and selected-text context capture, with a preview before
     sensitive context is saved.
-12. [ ] Implement the local Rust reminder scheduler plus OS notification actions:
+12. [x] Implement the local Rust reminder scheduler plus OS notification actions:
     Open Context, Continue in Codex, Snooze, and Done.
 
 ## Workstream 4: CockroachDB memory

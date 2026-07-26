@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import {
   createTask,
@@ -215,6 +216,15 @@ export default function App() {
       cancelled = true;
     };
   }, [selectedId, isTaskView]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<string>("pulse://open-task", (event) => {
+      setView("All");
+      setSelectedId(event.payload);
+    }).then((fn) => { unlisten = fn; });
+    return () => unlisten?.();
+  }, []);
 
   useEffect(() => {
     const poll = () => void dueReminders().then((reminders) => {
@@ -654,7 +664,7 @@ export default function App() {
             <div className="omnibox-actions"><button onClick={() => void buildOmniboxPreview()} disabled={!omniboxInput.trim()}>Preview</button><button className="primary" onClick={() => void submitOmnibox()} disabled={!omniboxInput.trim() || omniboxBusy}>{omniboxPreview?.needs_context_confirmation ? "Confirm" : "Run"}</button></div>
           </section>
         ) : null}
-        <button className={`pet ${due.length ? "pet-due" : ""}`} onClick={() => setOmniboxOpen((open) => !open)} aria-label="Open Pulse omnibox"><span className="pet-eye" /> <span className="pet-eye" /></button>
+        <button className={`pet ${due.length ? "pet-due" : ""}`} onClick={() => setOmniboxOpen((open) => !open)} aria-label="Open Pulse omnibox"><img src="/pulse-firefly-256.png" alt="Pulse firefly" /></button>
       </div>
     </div>
   );

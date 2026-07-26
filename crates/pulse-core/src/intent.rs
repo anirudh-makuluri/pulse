@@ -104,4 +104,26 @@ fn parse_clock(value: &str) -> Option<NaiveTime> {
 }
 
 #[cfg(test)]
-mod tests { use super::*; #[test] fn parses_reminder() { let p = parse_omnibox("Remind me to review the PR in 30 minutes", Local::now()); assert_eq!(p.intent, OmniboxIntent::CreateReminder); assert_eq!(p.subject, "review the PR"); assert!(p.due_at.is_some()); } }
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_reminder() {
+        let p = parse_omnibox("Remind me to review the PR in 30 minutes", Local::now());
+        assert_eq!(p.intent, OmniboxIntent::CreateReminder);
+        assert_eq!(p.subject, "review the PR");
+        assert!(p.due_at.is_some());
+    }
+
+    #[test]
+    fn routes_crud_search_and_continuity_without_an_llm() {
+        let now = Local::now();
+        assert_eq!(parse_omnibox("add upgrade dependencies", now).intent, OmniboxIntent::CreateTask);
+        assert_eq!(parse_omnibox("done upgrade dependencies", now).intent, OmniboxIntent::CompleteTask);
+        assert_eq!(parse_omnibox("delete old migration", now).intent, OmniboxIntent::DeleteTask);
+        assert_eq!(parse_omnibox("find authentication", now).intent, OmniboxIntent::SearchActivity);
+        assert_eq!(parse_omnibox("resume authentication", now).intent, OmniboxIntent::ResumeTask);
+        assert_eq!(parse_omnibox("send to codex authentication", now).intent, OmniboxIntent::TransferTask);
+        assert_eq!(parse_omnibox("open context authentication", now).intent, OmniboxIntent::OpenContext);
+    }
+}

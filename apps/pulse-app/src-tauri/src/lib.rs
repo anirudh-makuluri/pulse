@@ -6,12 +6,15 @@ use pulse_core::{
 };
 use pulse_llm::llm_status;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
-use tauri::Manager;
+use std::{collections::HashMap, sync::{Arc, Mutex}, thread, time::Duration};
+use tauri::{Emitter, Manager, PhysicalPosition};
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
 #[derive(Default)]
 struct ManagedService(Mutex<Option<CommandChild>>);
+
+#[derive(Default)]
+struct ContextTracker(Arc<Mutex<(Option<String>, Option<String>)>>);
 
 #[derive(Debug, Serialize)]
 struct TaskDetail {
@@ -114,16 +117,177 @@ fn stop_bundled_service(app: &tauri::AppHandle) {
     }
 }
 
+/// Keep the companion out of the taskbar and at the usable bottom-right edge
+/// of the user's primary display (above the OS taskbar/dock).
+fn pin_pet_to_bottom_right<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| e.to_string())?
+        .or(window.primary_monitor().map_err(|e| e.to_string())?)
+        .ok_or_else(|| "no display available for Pulse pet".to_string())?;
+    let area = monitor.work_area();
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let x = area.position.x + area.size.width as i32 - size.width as i32 - 18;
+    let y = area.position.y + area.size.height as i32 - size.height as i32 - 18;
+    window.set_position(PhysicalPosition::new(x, y)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_pet_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), String> {
+    let pet = app.get_webview_window("pet").ok_or_else(|| "Pulse pet window unavailable".to_string())?;
+    if expanded {
+        pet.set_size(tauri::LogicalSize::new(460.0, 500.0)).map_err(|e| e.to_string())?;
+    } else {
+        pet.set_size(tauri::LogicalSize::new(68.0, 68.0)).map_err(|e| e.to_string())?;
+    }
+    pin_pet_to_bottom_right(&pet)
+}
+
+fn reveal_task_context(app: &tauri::AppHandle, task_id: &str) -> Result<(), String> {
+    let main = app.get_webview_window("main").ok_or_else(|| "Pulse workspace unavailable".to_string())?;
+    main.show().map_err(|e| e.to_string())?;
+    main.set_focus().map_err(|e| e.to_string())?;
+    app.emit_to("main", "pulse://open-task", task_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    let main = app.get_webview_window("main").ok_or_else(|| "Pulse workspace unavailable".to_string())?;
+    main.show().map_err(|e| e.to_string())?;
+    main.set_focus().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn show_pet_context_menu(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, TrackPopupMenu,
+            MF_STRING, TPM_RETURNCMD,
+        };
+
+        const OPEN_MAIN_ID: usize = 1;
+        let pet = app.get_webview_window("pet").ok_or_else(|| "Pulse pet window unavailable".to_string())?;
+        let hwnd = pet.hwnd().map_err(|e| e.to_string())?.0 as *mut std::ffi::c_void;
+        let label: Vec<u16> = "Open full Pulse\0".encode_utf16().collect();
+        unsafe {
+            let menu = CreatePopupMenu();
+            if menu.is_null() {
+                return Err("could not create the Pulse menu".into());
+            }
+            if AppendMenuW(menu, MF_STRING, OPEN_MAIN_ID, label.as_ptr()) == 0 {
+                DestroyMenu(menu);
+                return Err("could not add the Pulse menu item".into());
+            }
+            let mut point = POINT { x: 0, y: 0 };
+            if GetCursorPos(&mut point) == 0 {
+                DestroyMenu(menu);
+                return Err("could not read the cursor position".into());
+            }
+            // TrackPopupMenu is synchronous, so this Win32 menu stays above the
+            // topmost pet until the user chooses an item or dismisses it.
+            let selected = TrackPopupMenu(menu, TPM_RETURNCMD, point.x, point.y, 0, hwnd, std::ptr::null());
+            DestroyMenu(menu);
+            if selected as usize == OPEN_MAIN_ID {
+                return show_main_window(app);
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("native Pulse menus are currently available on Windows only".into())
+    }
+}
+
+#[tauri::command]
+fn open_task_context(app: tauri::AppHandle, task_id: String, mode: String) -> Result<(), String> {
+    let store = open_store()?;
+    let task = store.resolve_task(&task_id).map_err(|e| e.to_string())?;
+    if mode == "continue_coding" {
+        store.record_event(NewActivityEvent {
+            task_id: task.id,
+            session_id: None,
+            kind: "handoff_requested".into(),
+            summary: "Continue this activity in Codex".into(),
+            payload_json: None,
+            source_ref: Some("pet".into()),
+            occurred_at: chrono::Utc::now(),
+        }).map_err(|e| e.to_string())?;
+    } else if mode != "open_context" {
+        return Err("unknown task-context action".into());
+    }
+    reveal_task_context(&app, &task_id)
+}
+
+fn start_desktop_reminder_actions(app: tauri::AppHandle) {
+    thread::spawn(move || {
+        let mut surfaced: HashMap<uuid::Uuid, chrono::DateTime<chrono::Utc>> = HashMap::new();
+        loop {
+            if let Ok(store) = open_store() {
+                if let Ok(reminders) = store.list_due_reminders(chrono::Utc::now()) {
+                    for reminder in reminders {
+                        if surfaced.get(&reminder.id) == Some(&reminder.due_at) {
+                            continue;
+                        }
+                        surfaced.insert(reminder.id, reminder.due_at);
+                        let action_app = app.clone();
+                        thread::spawn(move || {
+                            let shown = notify_rust::Notification::new()
+                                .summary("Pulse reminder")
+                                .body(&reminder.title)
+                                .action("open_context", "Open Context")
+                                .action("continue_coding", "Continue in Codex")
+                                .action("snooze", "Snooze")
+                                .action("done", "Done")
+                                .show();
+                            if let Ok(handle) = shown {
+                                handle.wait_for_action(|action| {
+                                    let action = action.to_string();
+                                    let task_id = reminder.task_id;
+                                    let reminder_id = reminder.id;
+                                    let result = match action.as_str() {
+                                        "open_context" => reveal_task_context(&action_app, &task_id.to_string()),
+                                        "continue_coding" => open_task_context(action_app.clone(), task_id.to_string(), "continue_coding".into()),
+                                        "snooze" => open_store().and_then(|store| store.snooze_reminder(reminder_id, chrono::Utc::now() + chrono::Duration::minutes(30)).map_err(|e| e.to_string()).map(|_| ())),
+                                        "done" => open_store().and_then(|store| store.set_reminder_status(reminder_id, ReminderStatus::Done).map_err(|e| e.to_string()).map(|_| ())),
+                                        _ => Ok(()),
+                                    };
+                                    if let Err(error) = result {
+                                        eprintln!("Pulse reminder action failed: {error}");
+                                    }
+                                });
+                            }
+                        });
+                    }
+                }
+            }
+            thread::sleep(Duration::from_secs(10));
+        }
+    });
+}
+
 fn parse_status(s: &str) -> Result<TaskStatus, String> {
     TaskStatus::parse(s).ok_or_else(|| format!("invalid status: {s}"))
 }
 
-fn capture_context_envelope(include_selected_text: bool) -> ContextEnvelope {
+fn is_pulse_window(title: Option<&str>) -> bool {
+    matches!(title, Some("Pulse") | Some("Pulse pet"))
+}
+
+fn capture_context_envelope(include_selected_text: bool, tracker: &ContextTracker) -> ContextEnvelope {
     // Clipboard access is only performed after an explicit UI action. In the MVP it
     // represents selected text copied by the user; it is never persisted until the
     // preview is confirmed.
     let selected_text = include_selected_text.then(capture_clipboard_text).flatten();
     let (active_app, window_title) = active_window_metadata();
+    let (active_app, window_title) = if is_pulse_window(window_title.as_deref()) {
+        tracker.0.lock().ok().map(|value| value.clone()).unwrap_or((active_app, window_title))
+    } else {
+        (active_app, window_title)
+    };
     ContextEnvelope {
         active_app,
         window_title,
@@ -148,6 +312,18 @@ fn active_window_metadata() -> (Option<String>, Option<String>) {
 
 #[cfg(not(windows))]
 fn active_window_metadata() -> (Option<String>, Option<String>) { (None, None) }
+
+fn start_active_window_tracker(tracker: Arc<Mutex<(Option<String>, Option<String>)>>) {
+    thread::spawn(move || loop {
+        let context = active_window_metadata();
+        if !is_pulse_window(context.1.as_deref()) {
+            if let Ok(mut latest) = tracker.lock() {
+                *latest = context;
+            }
+        }
+        thread::sleep(Duration::from_millis(750));
+    });
+}
 
 #[cfg(windows)]
 fn capture_clipboard_text() -> Option<String> {
@@ -181,8 +357,8 @@ fn find_task(store: &Store, selected_id: Option<&str>, subject: &str) -> Result<
 }
 
 #[tauri::command]
-fn preview_omnibox(input: String, include_selected_text: bool) -> OmniboxPreview {
-    let context = capture_context_envelope(include_selected_text);
+fn preview_omnibox(input: String, include_selected_text: bool, tracker: tauri::State<'_, ContextTracker>) -> OmniboxPreview {
+    let context = capture_context_envelope(include_selected_text, &tracker);
     OmniboxPreview {
         parsed: parse_omnibox(&input, chrono::Local::now()),
         needs_context_confirmation: context.selected_text.is_some(),
@@ -527,6 +703,7 @@ fn export_history_cmd(format: String) -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(ManagedService::default())
+        .manage(ContextTracker::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
@@ -535,6 +712,13 @@ pub fn run() {
                 // the console without preventing users from opening their data.
                 eprintln!("Pulse service did not auto-start: {error}");
             }
+            if let Some(pet) = app.get_webview_window("pet") {
+                if let Err(error) = pin_pet_to_bottom_right(&pet) {
+                    eprintln!("Pulse pet could not be positioned: {error}");
+                }
+            }
+            start_desktop_reminder_actions(app.handle().clone());
+            start_active_window_tracker(app.state::<ContextTracker>().0.clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -555,6 +739,10 @@ pub fn run() {
             execute_omnibox,
             due_reminders,
             reminder_action
+            ,open_task_context
+            ,set_pet_expanded
+            ,show_main_window
+            ,show_pet_context_menu
         ])
         .build(tauri::generate_context!())
         .expect("error while building Pulse")
