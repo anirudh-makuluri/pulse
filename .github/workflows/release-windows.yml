@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main
+    paths:
+      - ".github/workflows/release-windows.yml"
+      - "apps/pulse-app/**"
+      - "crates/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
 
 permissions:
   contents: write
