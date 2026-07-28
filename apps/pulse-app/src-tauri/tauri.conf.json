@@ -18,7 +18,8 @@
         "height": 760,
         "resizable": true,
         "fullscreen": false,
-        "visible": false
+        "visible": false,
+        "decorations": false
       },
       {
         "label": "pet",
@@ -52,11 +53,12 @@
       }
     },
     "icon": [
-      "../../../pulse-firefly-icon-pack/pulse-firefly-32.png",
-      "../../../pulse-firefly-icon-pack/pulse-firefly-128.png",
-      "../../../pulse-firefly-icon-pack/pulse-firefly-256.png",
-      "../../../pulse-firefly-icon-pack/pulse-firefly-512.png",
-      "../../../pulse-firefly-icon-pack/pulse-firefly.ico"
+      "icons/pulse-logo-32.png",
+      "icons/pulse-logo-128.png",
+      "icons/pulse-logo-256.png",
+      "icons/pulse-logo-512.png",
+      "icons/pulse-logo.ico",
+      "icons/pulse-logo.icns"
     ]
   }
 }

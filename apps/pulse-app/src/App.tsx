@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import {
   createTask,
@@ -12,9 +13,6 @@ import {
   listTasks,
   markDone,
   dueReminders,
-  executeOmnibox,
-  previewOmnibox,
-  reminderAction,
   privacyAcknowledge,
   serviceInfo,
   setSourceEnabled,
@@ -22,7 +20,7 @@ import {
   syncRecentSessions,
   type SettingsSnapshot,
 } from "./api";
-import type { ActivityTimeline, Reminder, Task, TaskStatus } from "./types";
+import type { ActivityTimeline, Task, TaskStatus } from "./types";
 
 type View =
   | "Inbox"
@@ -127,23 +125,19 @@ function timelineEntries(timeline: ActivityTimeline): TimelineEntry[] {
 }
 
 export default function App() {
+  const desktopWindow = getCurrentWebviewWindow();
   const [view, setView] = useState<View>("Inbox");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ActivityTimeline | null>(null);
   const [title, setTitle] = useState("");
+  const [captureOpen, setCaptureOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState("…");
   const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState<SettingsSnapshot | null>(null);
   const [summaryText, setSummaryText] = useState<string>("(loading…)");
   const [exportPath, setExportPath] = useState<string | null>(null);
-  const [omniboxOpen, setOmniboxOpen] = useState(false);
-  const [omniboxInput, setOmniboxInput] = useState("");
-  const [omniboxPreview, setOmniboxPreview] = useState<Awaited<ReturnType<typeof previewOmnibox>> | null>(null);
-  const [includeSelection, setIncludeSelection] = useState(false);
-  const [due, setDue] = useState<Reminder[]>([]);
-  const [omniboxBusy, setOmniboxBusy] = useState(false);
   const [syncingSessions, setSyncingSessions] = useState(false);
   const notifiedDue = useRef(new Set<string>());
 
@@ -248,52 +242,11 @@ export default function App() {
           if (allowed) sendNotification({ title: "Pulse reminder", body: firstNew.title });
         })().catch(() => undefined);
       }
-      setDue(reminders);
     }).catch(() => undefined);
     poll();
     const id = window.setInterval(poll, 15000);
     return () => window.clearInterval(id);
   }, []);
-
-  async function buildOmniboxPreview() {
-    if (!omniboxInput.trim()) return;
-    try {
-      setOmniboxPreview(await previewOmnibox(omniboxInput, includeSelection));
-    } catch (err) { setError(String(err)); }
-  }
-
-  async function submitOmnibox() {
-    let preview = omniboxPreview;
-    if (!preview) {
-      if (!omniboxInput.trim()) return;
-      try {
-        preview = await previewOmnibox(omniboxInput, includeSelection);
-        setOmniboxPreview(preview);
-      } catch (err) { setError(String(err)); return; }
-      if (preview.needs_context_confirmation) return;
-    }
-    setOmniboxBusy(true);
-    try {
-      const result = await executeOmnibox(omniboxInput, selectedId, preview.context);
-      setInfo(result.message);
-      if (result.task) { setSelectedId(result.task.id); setDetail(await getActivityTimeline(result.task.id)); }
-      if (result.tasks.length) setTasks(result.tasks);
-      await refreshTasks();
-      setOmniboxInput(""); setOmniboxPreview(null); setOmniboxOpen(false); setIncludeSelection(false);
-    } catch (err) { setError(String(err)); }
-    finally { setOmniboxBusy(false); }
-  }
-
-  async function actOnReminder(reminder: Reminder, action: "open_context" | "continue_coding" | "snooze" | "done") {
-    try {
-      await reminderAction(reminder.id, action);
-      if (action === "open_context" || action === "continue_coding") {
-        setSelectedId(reminder.task_id); setDetail(await getActivityTimeline(reminder.task_id));
-      }
-      setDue(await dueReminders());
-      await refreshTasks();
-    } catch (err) { setError(String(err)); }
-  }
 
   async function onAdd(e: FormEvent) {
     e.preventDefault();
@@ -302,6 +255,7 @@ export default function App() {
     try {
       const task = await createTask(t, view === "Today");
       setTitle("");
+      setCaptureOpen(false);
       setSelectedId(task.id);
       await refreshTasks();
     } catch (err) {
@@ -353,7 +307,7 @@ export default function App() {
       setView("Inbox");
       setTasks(await listTasks("Inbox"));
       setInfo(
-        `Session sync: ${result.tasks_created} added, ${result.tasks_updated} updated from ${result.sessions_reviewed} reviewed.`,
+        `Session sync: ${result.tasks_created} added, ${result.tasks_updated} updated; ${result.sessions_skipped_unchanged} unchanged sessions skipped.`,
       );
     } catch (err) {
       setError(String(err));
@@ -363,11 +317,47 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          Pulse <span>·</span>
+    <div className="dashboard-shell">
+      <header
+        className="window-bar"
+        data-tauri-drag-region
+        onMouseDown={(event) => {
+          if (event.button === 0) void desktopWindow.startDragging();
+        }}
+        onDoubleClick={() => void desktopWindow.toggleMaximize()}
+      >
+        <div className="window-identity" data-tauri-drag-region>
+          <img className="window-mark" src="/pulse-logo.png" alt="" aria-hidden="true" />
+          <span>Pulse</span>
+          <span className="window-context" data-tauri-drag-region>Local-first task memory</span>
         </div>
+        <div className="window-controls">
+          <button
+            className="window-control minimize"
+            type="button"
+            aria-label="Minimize window"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={() => void desktopWindow.minimize()}
+          />
+          <button
+            className="window-control maximize"
+            type="button"
+            aria-label="Maximize or restore window"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={() => void desktopWindow.toggleMaximize()}
+          />
+          <button
+            className="window-control close"
+            type="button"
+            aria-label="Close window"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={() => void desktopWindow.close()}
+          />
+        </div>
+      </header>
+
+      <div className="app">
+        <aside className="sidebar">
         <nav className="nav">
           {TASK_VIEWS.map((v) => (
             <button
@@ -392,6 +382,9 @@ export default function App() {
           </button>
         </nav>
         <div className="sidebar-footer">
+          <button className="capture-task" type="button" onClick={() => setCaptureOpen(true)}>
+            Capture task
+          </button>
           <button className="session-sync" type="button" onClick={() => void syncSessions()} disabled={syncingSessions}>
             {syncingSessions ? "Syncing sessions..." : "Sync latest sessions"}
           </button>
@@ -400,29 +393,11 @@ export default function App() {
             <div>{info}</div>
           </div>
         </div>
-      </aside>
+        </aside>
 
-      <main className="main">
+        <main className="main">
         {isTaskView ? (
           <>
-            <form className="toolbar" onSubmit={onAdd}>
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder={
-                  view === "Today"
-                    ? "Add a task for today…"
-                    : "Capture a task…"
-                }
-              />
-              <button type="submit" className="primary">
-                Add
-              </button>
-              <button type="button" onClick={() => void refreshTasks()}>
-                Refresh
-              </button>
-            </form>
-
             {error ? <div className="error">{error}</div> : null}
 
             <div className="list">
@@ -604,9 +579,9 @@ export default function App() {
             )}
           </div>
         ) : null}
-      </main>
+        </main>
 
-      <aside className="detail">
+        <aside className="detail">
         {!isTaskView ? (
           <div className="empty">
             {view === "Summary"
@@ -699,32 +674,40 @@ export default function App() {
             </div>
           </>
         )}
-      </aside>
+        </aside>
 
-      <div className="pet-shell" aria-live="polite">
-        {due.length ? (
-          <section className="reminder-card">
-            <div className="reminder-label">Reminder due</div>
-            <strong>{due[0].title}</strong>
-            <div className="reminder-actions">
-              <button onClick={() => void actOnReminder(due[0], "open_context")}>Open Context</button>
-              <button onClick={() => void actOnReminder(due[0], "continue_coding")}>Continue in Codex</button>
-              <button onClick={() => void actOnReminder(due[0], "snooze")}>Snooze</button>
-              <button className="primary" onClick={() => void actOnReminder(due[0], "done")}>Done</button>
-            </div>
-          </section>
-        ) : null}
-        {omniboxOpen ? (
-          <section className="omnibox" role="dialog" aria-label="Pulse omnibox">
-            <div className="omnibox-title">Tell Pulse what to do</div>
-            <input autoFocus value={omniboxInput} onChange={(e) => { setOmniboxInput(e.target.value); setOmniboxPreview(null); }} onKeyDown={(e) => { if (e.key === "Escape") setOmniboxOpen(false); }} placeholder="Remind me to review this in 30 minutes" />
-            <label className="capture-toggle"><input type="checkbox" checked={includeSelection} onChange={(e) => { setIncludeSelection(e.target.checked); setOmniboxPreview(null); }} /> Include copied selected text</label>
-            {omniboxPreview ? <div className="omnibox-preview"><b>{omniboxPreview.parsed.intent.replace(/_/g, " ")}</b>{omniboxPreview.parsed.due_at ? ` · ${new Date(omniboxPreview.parsed.due_at).toLocaleString()}` : null}{omniboxPreview.needs_context_confirmation ? <p>Preview: selected text will be saved only after you confirm.</p> : <p>Only this command will be saved.</p>}</div> : null}
-            <div className="omnibox-actions"><button onClick={() => void buildOmniboxPreview()} disabled={!omniboxInput.trim()}>Preview</button><button className="primary" onClick={() => void submitOmnibox()} disabled={!omniboxInput.trim() || omniboxBusy}>{omniboxPreview?.needs_context_confirmation ? "Confirm" : "Run"}</button></div>
-          </section>
-        ) : null}
-        <button className={`pet ${due.length ? "pet-due" : ""}`} onClick={() => setOmniboxOpen((open) => !open)} aria-label="Open Pulse omnibox"><img src="/pulse-firefly-256.png" alt="Pulse firefly" /></button>
       </div>
+      {captureOpen ? (
+        <div className="capture-backdrop" role="presentation" onMouseDown={() => setCaptureOpen(false)}>
+          <form
+            className="capture-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="capture-task-title"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={onAdd}
+          >
+            <div className="capture-dialog-heading">
+              <div>
+                <div className="eyebrow">New task</div>
+                <h2 id="capture-task-title">Capture task</h2>
+              </div>
+              <button type="button" className="dialog-close" onClick={() => setCaptureOpen(false)} aria-label="Close task capture" />
+            </div>
+            <input
+              autoFocus
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Escape") setCaptureOpen(false); }}
+              placeholder={view === "Today" ? "Add a task for today…" : "What needs your attention?"}
+            />
+            <div className="capture-dialog-actions">
+              <button type="button" onClick={() => setCaptureOpen(false)}>Cancel</button>
+              <button type="submit" className="primary">Add task</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

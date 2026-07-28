@@ -6,8 +6,9 @@ use crate::error::{PulseError, Result};
 use crate::models::{
     ActivityEvent, Artifact, CheckIn, CheckInKind, CheckInStatus, Checkpoint, Evidence, Memory,
     NewActivityEvent, NewArtifact, NewCheckIn, NewCheckpoint, NewEvidence, NewMemory, NewReminder,
-    NewSession, NewTask, Reminder, ReminderStatus, Session, SourceWatermark, Summary,
-    SyncOutboxItem, SyncOutcome, Task, TaskSource, TaskStatus, TaskUpdate,
+    NewSession, NewSessionSyncState, NewTask, Reminder, ReminderStatus, Session, SessionSyncState,
+    SourceWatermark, Summary, SyncOutboxItem, SyncOutcome, Task, TaskSource, TaskStatus,
+    TaskUpdate,
 };
 use crate::state::validate_transition;
 
@@ -604,6 +605,80 @@ impl Store {
             .map_err(Into::into)
     }
 
+    /// Read the internal checkpoint used to avoid re-analyzing an unchanged
+    /// external session with an LLM.
+    pub fn get_session_sync_state(&self, external_id: &str) -> Result<Option<SessionSyncState>> {
+        self.conn
+            .prepare(
+                "SELECT external_id, source, source_session_id, task_id, content_fingerprint, source_mtime_ms, source_size_bytes, result, last_checked_at FROM session_sync_state WHERE external_id = ?1",
+            )?
+            .query_row(params![external_id], map_session_sync_state)
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Upsert a sync checkpoint. Its optional task ID is the durable
+    /// one-session-to-one-task association used by explicit session sync.
+    pub fn upsert_session_sync_state(
+        &self,
+        state: NewSessionSyncState,
+    ) -> Result<SessionSyncState> {
+        if !matches!(state.source.as_str(), "claude" | "codex") {
+            return Err(PulseError::Validation(
+                "session sync source must be claude or codex".into(),
+            ));
+        }
+        if !matches!(
+            state.result.as_str(),
+            "created" | "updated" | "no_actionable_work"
+        ) {
+            return Err(PulseError::Validation("invalid session sync result".into()));
+        }
+        if state.external_id.trim().is_empty()
+            || state.source_session_id.trim().is_empty()
+            || state.content_fingerprint.trim().is_empty()
+        {
+            return Err(PulseError::Validation(
+                "session sync checkpoint fields must not be empty".into(),
+            ));
+        }
+        if let Some(task_id) = state.task_id {
+            self.ensure_task_exists(task_id)?;
+        }
+        let external_id = state.external_id.clone();
+
+        self.conn.execute(
+            r#"
+            INSERT INTO session_sync_state (
+              external_id, source, source_session_id, task_id, content_fingerprint,
+              source_mtime_ms, source_size_bytes, result, last_checked_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(external_id) DO UPDATE SET
+              task_id = excluded.task_id,
+              content_fingerprint = excluded.content_fingerprint,
+              source_mtime_ms = excluded.source_mtime_ms,
+              source_size_bytes = excluded.source_size_bytes,
+              result = excluded.result,
+              last_checked_at = excluded.last_checked_at
+            "#,
+            params![
+                state.external_id,
+                state.source,
+                state.source_session_id,
+                state.task_id.map(|id| id.to_string()),
+                state.content_fingerprint,
+                state.source_mtime_ms,
+                state.source_size_bytes,
+                state.result,
+                state.last_checked_at.to_rfc3339(),
+            ],
+        )?;
+
+        self.get_session_sync_state(&external_id)?.ok_or_else(|| {
+            PulseError::Validation("session sync checkpoint missing after upsert".into())
+        })
+    }
+
     pub fn list_sessions(&self, task_id: Uuid) -> Result<Vec<Session>> {
         self.list_timeline_rows(
             "SELECT id, task_id, agent, application, repository_path, external_id, source_ref, started_at, ended_at, created_at, metadata_json FROM sessions WHERE task_id = ?1 ORDER BY started_at DESC",
@@ -1022,6 +1097,23 @@ fn map_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
     })
 }
 
+fn map_session_sync_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSyncState> {
+    Ok(SessionSyncState {
+        external_id: row.get(0)?,
+        source: row.get(1)?,
+        source_session_id: row.get(2)?,
+        task_id: row
+            .get::<_, Option<String>>(3)?
+            .map(parse_uuid)
+            .transpose()?,
+        content_fingerprint: row.get(4)?,
+        source_mtime_ms: row.get(5)?,
+        source_size_bytes: row.get(6)?,
+        result: row.get(7)?,
+        last_checked_at: parse_dt(&row.get::<_, String>(8)?)?,
+    })
+}
+
 fn map_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActivityEvent> {
     Ok(ActivityEvent {
         id: parse_uuid(row.get(0)?)?,
@@ -1276,6 +1368,50 @@ mod tests {
 
         let got = s.get_task(t.id).unwrap().unwrap();
         assert_eq!(got.id, t.id);
+    }
+
+    #[test]
+    fn session_sync_state_roundtrip_and_repoints_to_same_task() {
+        let s = store();
+        let task = s
+            .create_task(NewTask::manual("Review imported session"))
+            .unwrap();
+        let now = Utc::now();
+        let state = NewSessionSyncState {
+            external_id: "codex:session-1".into(),
+            source: "codex".into(),
+            source_session_id: "session-1".into(),
+            task_id: Some(task.id),
+            content_fingerprint: "abc123".into(),
+            source_mtime_ms: 10,
+            source_size_bytes: 100,
+            result: "created".into(),
+            last_checked_at: now,
+        };
+        s.upsert_session_sync_state(state.clone()).unwrap();
+        let mut updated = s
+            .get_session_sync_state("codex:session-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.task_id, Some(task.id));
+        assert_eq!(updated.content_fingerprint, "abc123");
+
+        s.upsert_session_sync_state(NewSessionSyncState {
+            content_fingerprint: "def456".into(),
+            source_mtime_ms: 20,
+            source_size_bytes: 200,
+            result: "updated".into(),
+            last_checked_at: now,
+            ..state
+        })
+        .unwrap();
+        updated = s
+            .get_session_sync_state("codex:session-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.task_id, Some(task.id));
+        assert_eq!(updated.content_fingerprint, "def456");
+        assert_eq!(updated.source_mtime_ms, 20);
     }
 
     #[test]

@@ -331,6 +331,34 @@ impl NewSession {
     }
 }
 
+/// Internal sync checkpoint for one external agent session. It is separate
+/// from a user's work checkpoints and is never shown as task activity.
+#[derive(Debug, Clone)]
+pub struct SessionSyncState {
+    pub external_id: String,
+    pub source: String,
+    pub source_session_id: String,
+    pub task_id: Option<Uuid>,
+    pub content_fingerprint: String,
+    pub source_mtime_ms: i64,
+    pub source_size_bytes: i64,
+    pub result: String,
+    pub last_checked_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewSessionSyncState {
+    pub external_id: String,
+    pub source: String,
+    pub source_session_id: String,
+    pub task_id: Option<Uuid>,
+    pub content_fingerprint: String,
+    pub source_mtime_ms: i64,
+    pub source_size_bytes: i64,
+    pub result: String,
+    pub last_checked_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityEvent {
     pub id: Uuid,

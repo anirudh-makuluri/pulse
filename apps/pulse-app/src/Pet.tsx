@@ -114,9 +114,9 @@ export default function Pet() {
       ) : null}
 
       {resultTasks.length ? <section className="pet-results"><div className="reminder-label">Matches</div>{resultTasks.slice(0, 4).map((task) => <button key={task.id} onClick={() => void openTaskContext(task.id, "open_context")}>{task.title}</button>)}</section> : null}
-      {/* {message ? <div className="pet-message">{message}</div> : null} */}
+      {message ? <div className="pet-message">{message}</div> : null}
       <div className="pet-row">
-        <button className={`pet ${reminders.length ? "pet-due" : ""}`} onClick={() => setOpen((value) => !value)} onContextMenu={(event) => { event.preventDefault(); void showPetContextMenu(); }} aria-label="Open Pulse task entry"><img src="/pulse-firefly-256.png" alt="Pulse firefly" /></button>
+        <button className={`pet ${reminders.length ? "pet-due" : ""}`} onClick={() => setOpen((value) => !value)} onContextMenu={(event) => { event.preventDefault(); void showPetContextMenu(); }} aria-label="Open Pulse task entry"><img src="/pulse-logo.png" alt="Pulse logo" /></button>
       </div>
     </main>
   );

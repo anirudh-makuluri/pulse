@@ -35,6 +35,7 @@ export interface RecentSessionSyncResult {
   sessions_already_imported: number;
   tasks_created: number;
   tasks_updated: number;
+  sessions_skipped_unchanged: number;
   sessions_without_actionable_work: number;
   sources_checked: string[];
 }

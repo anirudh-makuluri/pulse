@@ -151,14 +151,25 @@ fn set_pet_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), String>
     let pet = app
         .get_webview_window("pet")
         .ok_or_else(|| "Pulse pet window unavailable".to_string())?;
-    if expanded {
+    // Resizing a transparent, always-on-top window while it is visible briefly
+    // exposes its old top-left position on Windows. Hide it for the resize and
+    // bottom-right pinning step, then restore it in its stable location.
+    let was_visible = pet.is_visible().map_err(|e| e.to_string())?;
+    if was_visible {
+        pet.hide().map_err(|e| e.to_string())?;
+    }
+    let resize_result = if expanded {
         pet.set_size(tauri::LogicalSize::new(460.0, 500.0))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())
     } else {
         pet.set_size(tauri::LogicalSize::new(68.0, 68.0))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())
+    };
+    let result = resize_result.and_then(|_| pin_pet_to_bottom_right(&pet));
+    if was_visible {
+        pet.show().map_err(|e| e.to_string())?;
     }
-    pin_pet_to_bottom_right(&pet)
+    result
 }
 
 fn reveal_task_context(app: &tauri::AppHandle, task_id: &str) -> Result<(), String> {

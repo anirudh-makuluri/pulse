@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{Local, Timelike, Utc};
 use pulse_core::{
-    compute_dedup_key, CheckInKind, Config, NewCheckIn, NewEvidence, NewSession, NewTask,
-    SourceWatermark, Store, SyncOutcome, TaskSource, TaskStatus, TaskUpdate,
+    compute_dedup_key, CheckInKind, Config, NewCheckIn, NewEvidence, NewSession,
+    NewSessionSyncState, NewTask, SourceWatermark, Store, SyncOutcome, TaskSource, TaskStatus,
+    TaskUpdate,
 };
 use pulse_llm::{
     redact_for_remote, resolve_llm_client, HeuristicClient, InferRequest, LlmClient, SummaryRequest,
@@ -17,6 +18,7 @@ use pulse_llm::{
 use pulse_sources::{
     ClaudeSource, CodexSource, DiscoveredArtifact, ExtractedBatch, SourceAdapter, SourceId,
 };
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub struct PipelineHandle {
@@ -30,6 +32,7 @@ pub struct RecentSessionSyncResult {
     pub sessions_already_imported: u32,
     pub tasks_created: u32,
     pub tasks_updated: u32,
+    pub sessions_skipped_unchanged: u32,
     pub sessions_without_actionable_work: u32,
     pub sources_checked: Vec<String>,
 }
@@ -40,6 +43,7 @@ struct SessionSyncInput {
     existing_session_id: Option<Uuid>,
     existing_task_id: Option<Uuid>,
     redacted_text: String,
+    content_fingerprint: String,
 }
 
 impl PipelineHandle {
@@ -143,6 +147,7 @@ pub fn sync_recent_sessions(
         sessions_already_imported: 0,
         tasks_created: 0,
         tasks_updated: 0,
+        sessions_skipped_unchanged: 0,
         sessions_without_actionable_work: 0,
         sources_checked: Vec::new(),
     };
@@ -162,6 +167,23 @@ pub fn sync_recent_sessions(
         for artifact in artifacts.into_iter().take(5) {
             result.sessions_reviewed += 1;
             let external_id = format!("{source_name}:{}", artifact.session_id);
+            let checkpoint = store
+                .get_session_sync_state(&external_id)
+                .map_err(|e| e.to_string())?;
+            if checkpoint.as_ref().is_some_and(|state| {
+                state.source_mtime_ms == artifact.mtime_ms
+                    && state.source_size_bytes == artifact.size_bytes as i64
+            }) {
+                if checkpoint
+                    .as_ref()
+                    .and_then(|state| state.task_id)
+                    .is_some()
+                {
+                    result.sessions_already_imported += 1;
+                }
+                result.sessions_skipped_unchanged += 1;
+                continue;
+            }
             let existing = store
                 .get_session_by_external_id(&external_id)
                 .map_err(|e| e.to_string())?;
@@ -172,8 +194,49 @@ pub fn sync_recent_sessions(
             let batch = adapter
                 .extract(&artifact, Some(0))
                 .map_err(|e| e.to_string())?;
+            let content_fingerprint = session_fingerprint(&batch.candidate_text);
             if batch.candidate_text.trim().is_empty() {
+                store
+                    .upsert_session_sync_state(NewSessionSyncState {
+                        external_id,
+                        source: source_name.clone(),
+                        source_session_id: batch.session_id.clone(),
+                        task_id: checkpoint
+                            .as_ref()
+                            .and_then(|state| state.task_id)
+                            .or_else(|| existing.as_ref().map(|session| session.task_id)),
+                        content_fingerprint,
+                        source_mtime_ms: batch.mtime_ms,
+                        source_size_bytes: batch.size_bytes as i64,
+                        result: "no_actionable_work".into(),
+                        last_checked_at: Utc::now(),
+                    })
+                    .map_err(|e| e.to_string())?;
                 result.sessions_without_actionable_work += 1;
+                continue;
+            }
+
+            if checkpoint
+                .as_ref()
+                .is_some_and(|state| state.content_fingerprint == content_fingerprint)
+            {
+                store
+                    .upsert_session_sync_state(NewSessionSyncState {
+                        external_id,
+                        source: source_name.clone(),
+                        source_session_id: batch.session_id.clone(),
+                        task_id: checkpoint.as_ref().and_then(|state| state.task_id),
+                        content_fingerprint,
+                        source_mtime_ms: batch.mtime_ms,
+                        source_size_bytes: batch.size_bytes as i64,
+                        result: checkpoint
+                            .as_ref()
+                            .map(|state| state.result.clone())
+                            .unwrap_or_else(|| "no_actionable_work".into()),
+                        last_checked_at: Utc::now(),
+                    })
+                    .map_err(|e| e.to_string())?;
+                result.sessions_skipped_unchanged += 1;
                 continue;
             }
 
@@ -182,8 +245,12 @@ pub fn sync_recent_sessions(
                 batch,
                 external_id,
                 existing_session_id: existing.as_ref().map(|session| session.id),
-                existing_task_id: existing.map(|session| session.task_id),
+                existing_task_id: checkpoint
+                    .as_ref()
+                    .and_then(|state| state.task_id)
+                    .or_else(|| existing.map(|session| session.task_id)),
                 redacted_text: session_excerpt(&redacted.text, 4_000),
+                content_fingerprint,
             });
         }
 
@@ -245,7 +312,7 @@ pub fn sync_recent_sessions(
                 .unwrap_or(candidate.confidence)
                 .clamp(0.0, 1.0);
             let dedup = compute_dedup_key(task_source, &input.batch.session_id, title);
-            let task = if let Some(task_id) = input.existing_task_id {
+            let (task, sync_result) = if let Some(task_id) = input.existing_task_id {
                 // Preserve the user's workflow state. Sync only refreshes the
                 // AI-written summary, next action, and observed outcome.
                 let task = store
@@ -264,7 +331,7 @@ pub fn sync_recent_sessions(
                     )
                     .map_err(|e| e.to_string())?;
                 result.tasks_updated += 1;
-                task
+                (task, "updated")
             } else if let Some(existing) =
                 store.find_by_dedup_key(&dedup).map_err(|e| e.to_string())?
             {
@@ -283,7 +350,7 @@ pub fn sync_recent_sessions(
                     )
                     .map_err(|e| e.to_string())?;
                 result.tasks_updated += 1;
-                task
+                (task, "updated")
             } else {
                 let mut task = NewTask::manual(title);
                 task.status = TaskStatus::Inbox;
@@ -298,8 +365,22 @@ pub fn sync_recent_sessions(
                 task.sync_outcome_confidence = Some(outcome_confidence);
                 let task = store.create_task(task).map_err(|e| e.to_string())?;
                 result.tasks_created += 1;
-                task
+                (task, "created")
             };
+
+            store
+                .upsert_session_sync_state(NewSessionSyncState {
+                    external_id: input.external_id.clone(),
+                    source: source_name.clone(),
+                    source_session_id: input.batch.session_id.clone(),
+                    task_id: Some(task.id),
+                    content_fingerprint: input.content_fingerprint.clone(),
+                    source_mtime_ms: input.batch.mtime_ms,
+                    source_size_bytes: input.batch.size_bytes as i64,
+                    result: sync_result.into(),
+                    last_checked_at: Utc::now(),
+                })
+                .map_err(|e| e.to_string())?;
 
             let snippet = candidate
                 .evidence_snippet
@@ -365,6 +446,24 @@ pub fn sync_recent_sessions(
             });
         }
 
+        for input in &inputs {
+            if handled_sessions.contains(&input.batch.session_id) {
+                continue;
+            }
+            store
+                .upsert_session_sync_state(NewSessionSyncState {
+                    external_id: input.external_id.clone(),
+                    source: source_name.clone(),
+                    source_session_id: input.batch.session_id.clone(),
+                    task_id: input.existing_task_id,
+                    content_fingerprint: input.content_fingerprint.clone(),
+                    source_mtime_ms: input.batch.mtime_ms,
+                    source_size_bytes: input.batch.size_bytes as i64,
+                    result: "no_actionable_work".into(),
+                    last_checked_at: Utc::now(),
+                })
+                .map_err(|e| e.to_string())?;
+        }
         result.sessions_without_actionable_work += (inputs.len() - handled_sessions.len()) as u32;
     }
 
@@ -382,6 +481,12 @@ fn session_excerpt(text: &str, max_chars: usize) -> String {
     let head: String = text.chars().take(head_len).collect();
     let tail: String = text.chars().skip(count.saturating_sub(tail_len)).collect();
     format!("{head}\n… [middle omitted] …\n{tail}")
+}
+
+fn session_fingerprint(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 fn parse_sync_outcome(value: Option<&str>) -> SyncOutcome {

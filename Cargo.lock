@@ -3902,6 +3902,7 @@ dependencies = [
  "pulse-sources",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "ureq 2.12.1",
  "uuid",

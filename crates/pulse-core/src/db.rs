@@ -5,12 +5,13 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{PulseError, Result};
 
 /// Highest migration version this binary knows how to apply.
-pub const LATEST_SCHEMA_VERSION: i64 = 4;
+pub const LATEST_SCHEMA_VERSION: i64 = 5;
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../migrations/002_activity_timeline.sql");
 const MIGRATION_003: &str = include_str!("../migrations/003_sync_outbox.sql");
 const MIGRATION_004: &str = include_str!("../migrations/004_sync_outcome.sql");
+const MIGRATION_005: &str = include_str!("../migrations/005_session_sync_state.sql");
 
 /// Open (or create) the SQLite database, enable pragmas, apply migrations.
 pub fn open(path: &Path) -> Result<Connection> {
@@ -81,6 +82,15 @@ fn migrate(conn: &Connection) -> Result<()> {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
             [4i64],
+        )?;
+        tx.commit()?;
+    }
+    if current < 5 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_005)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
+            [5i64],
         )?;
         tx.commit()?;
     }
@@ -159,6 +169,7 @@ mod tests {
             "memories",
             "artifacts",
             "sync_outbox",
+            "session_sync_state",
         ] {
             let exists: bool = conn
                 .query_row(
@@ -187,11 +198,11 @@ mod tests {
         assert_eq!(current_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
         let count: i64 = conn
             .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'events', 'checkpoints', 'reminders', 'memories', 'artifacts', 'sync_outbox')",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'events', 'checkpoints', 'reminders', 'memories', 'artifacts', 'sync_outbox', 'session_sync_state')",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
     }
 }
