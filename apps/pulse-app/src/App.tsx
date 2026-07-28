@@ -2,11 +2,11 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { Database, House, Inbox as InboxIcon, Settings as SettingsIcon } from "lucide-react";
 import {
   createTask,
   deleteTask,
   exportHistory,
-  generateSummary,
   getActivityTimeline,
   getSettings,
   getSummary,
@@ -23,16 +23,14 @@ import {
 import type { ActivityTimeline, Task, TaskStatus } from "./types";
 
 type View =
+  | "Home"
   | "Inbox"
-  | "Today"
-  | "Next"
-  | "Waiting"
-  | "Done"
-  | "All"
-  | "Summary"
+  | "Sources"
   | "Settings";
 
-const TASK_VIEWS: Array<Exclude<View, "Summary" | "Settings">> = [
+type TaskFilter = TaskStatus | "All";
+
+const TASK_FILTERS: TaskFilter[] = [
   "Inbox",
   "Today",
   "Next",
@@ -57,6 +55,41 @@ function outcomeLabel(outcome: Task["sync_outcome"]): string | null {
   if (outcome === "completed") return "Completed";
   if (outcome === "unclear") return "Unclear";
   return null;
+}
+
+function TaskPreview({
+  task,
+  onOpen,
+  compact = false,
+  selected = false,
+}: {
+  task: Task;
+  onOpen: () => void;
+  compact?: boolean;
+  selected?: boolean;
+}) {
+  return (
+    <button className={compact ? "home-task" : `task ${selected ? "selected" : ""}`} onClick={onOpen}>
+      <div className="task-title">{task.title}</div>
+      <div className="task-meta">
+        {!compact ? <span className="pill">{shortId(task.id)}</span> : null}
+        <span className="pill">{task.status}</span>
+        <span className={`pill ${sourceClass(task.source)}`}>{task.source}</span>
+        {outcomeLabel(task.sync_outcome) ? (
+          <span className={`pill outcome-${task.sync_outcome}`}>
+            {outcomeLabel(task.sync_outcome)}
+          </span>
+        ) : null}
+        {task.project ? <span className="pill">{task.project}</span> : null}
+        {!compact && task.confidence != null ? (
+          <span className="pill">conf {(task.confidence * 100).toFixed(0)}%</span>
+        ) : null}
+      </div>
+      {compact && task.suggested_next_action ? (
+        <div className="home-task-next">{task.suggested_next_action}</div>
+      ) : null}
+    </button>
+  );
 }
 
 type TimelineEntry = {
@@ -126,8 +159,10 @@ function timelineEntries(timeline: ActivityTimeline): TimelineEntry[] {
 
 export default function App() {
   const desktopWindow = getCurrentWebviewWindow();
-  const [view, setView] = useState<View>("Inbox");
+  const [view, setView] = useState<View>("Home");
+  const [taskFilter, setTaskFilter] = useState<TaskFilter>("Inbox");
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [homeTasks, setHomeTasks] = useState<Task[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ActivityTimeline | null>(null);
   const [title, setTitle] = useState("");
@@ -141,12 +176,28 @@ export default function App() {
   const [syncingSessions, setSyncingSessions] = useState(false);
   const notifiedDue = useRef(new Set<string>());
 
-  const isTaskView = TASK_VIEWS.includes(view as (typeof TASK_VIEWS)[number]);
+  const isTaskView = view === "Inbox";
   const statusFilter = useMemo(
-    () => (view === "All" || !isTaskView ? undefined : (view as TaskStatus)),
-    [view, isTaskView],
+    () => (taskFilter === "All" ? undefined : taskFilter),
+    [taskFilter],
   );
   const timeline = useMemo(() => (detail ? timelineEntries(detail) : []), [detail]);
+  const focusTasks = useMemo(
+    () => homeTasks.filter((task) => task.status === "Today" || task.sync_outcome === "in_progress").slice(0, 3),
+    [homeTasks],
+  );
+  const inboxTasks = useMemo(
+    () => homeTasks.filter((task) => task.status === "Inbox").slice(0, 3),
+    [homeTasks],
+  );
+  const recentTasks = useMemo(
+    () => homeTasks.filter((task) => task.status !== "Done").slice(0, 3),
+    [homeTasks],
+  );
+  const inboxCount = useMemo(
+    () => homeTasks.filter((task) => task.status === "Inbox").length,
+    [homeTasks],
+  );
 
   const refreshTasks = useCallback(async () => {
     if (!isTaskView) return;
@@ -180,12 +231,24 @@ export default function App() {
     }
   }, []);
 
-  const refreshSummary = useCallback(async () => {
+  const refreshHome = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const text = await getSummary();
-      setSummaryText(text || "(no summary for today yet)");
+      const [allTasks, sourceSettings, text, svc] = await Promise.all([
+        listTasks(),
+        getSettings(),
+        getSummary(),
+        serviceInfo().catch(() => "backend unknown"),
+      ]);
+      setHomeTasks(allTasks);
+      setSettings(sourceSettings);
+      setSummaryText(text || "No summary for today yet.");
+      setInfo(svc);
     } catch (e) {
-      setSummaryText(String(e));
+      setError(String(e));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -195,13 +258,15 @@ export default function App() {
       const id = window.setInterval(() => void refreshTasks(), 4000);
       return () => window.clearInterval(id);
     }
-    if (view === "Settings") {
+    if (view === "Home") {
+      void refreshHome();
+      const id = window.setInterval(() => void refreshHome(), 4000);
+      return () => window.clearInterval(id);
+    }
+    if (view === "Sources" || view === "Settings") {
       void refreshSettings();
     }
-    if (view === "Summary") {
-      void refreshSummary();
-    }
-  }, [view, isTaskView, refreshTasks, refreshSettings, refreshSummary]);
+  }, [view, isTaskView, refreshTasks, refreshSettings, refreshHome]);
 
   useEffect(() => {
     if (!selectedId || !isTaskView) {
@@ -224,7 +289,8 @@ export default function App() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listen<string>("pulse://open-task", (event) => {
-      setView("All");
+      setView("Inbox");
+      setTaskFilter("All");
       setSelectedId(event.payload);
     }).then((fn) => { unlisten = fn; });
     return () => unlisten?.();
@@ -253,11 +319,15 @@ export default function App() {
     const t = title.trim();
     if (!t) return;
     try {
-      const task = await createTask(t, view === "Today");
+      const task = await createTask(t, taskFilter === "Today");
       setTitle("");
       setCaptureOpen(false);
       setSelectedId(task.id);
-      await refreshTasks();
+      if (isTaskView) {
+        await refreshTasks();
+      } else {
+        await refreshHome();
+      }
     } catch (err) {
       setError(String(err));
     }
@@ -305,6 +375,7 @@ export default function App() {
     try {
       const result = await syncRecentSessions();
       setView("Inbox");
+      setTaskFilter("Inbox");
       setTasks(await listTasks("Inbox"));
       setInfo(
         `Session sync: ${result.tasks_created} added, ${result.tasks_updated} updated; ${result.sessions_skipped_unchanged} unchanged sessions skipped.`,
@@ -314,6 +385,19 @@ export default function App() {
     } finally {
       setSyncingSessions(false);
     }
+  }
+
+  function openTask(task: Task) {
+    setView("Inbox");
+    setTaskFilter(task.status);
+    setSelectedId(task.id);
+  }
+
+  function openInbox(filter: TaskFilter = "Inbox") {
+    setView("Inbox");
+    setTaskFilter(filter);
+    setSelectedId(null);
+    setDetail(null);
   }
 
   return (
@@ -329,7 +413,6 @@ export default function App() {
         <div className="window-identity" data-tauri-drag-region>
           <img className="window-mark" src="/pulse-logo.png" alt="" aria-hidden="true" />
           <span>Pulse</span>
-          <span className="window-context" data-tauri-drag-region>Local-first task memory</span>
         </div>
         <div className="window-controls">
           <button
@@ -356,28 +439,36 @@ export default function App() {
         </div>
       </header>
 
-      <div className="app">
+      <div className={`app ${isTaskView ? "" : "single-pane"}`}>
         <aside className="sidebar">
-        <nav className="nav">
-          {TASK_VIEWS.map((v) => (
-            <button
-              key={v}
-              className={view === v ? "active" : ""}
-              onClick={() => setView(v)}
-            >
-              {v}
-            </button>
-          ))}
+        <nav className="nav" aria-label="Primary navigation">
           <button
-            className={view === "Summary" ? "active" : ""}
-            onClick={() => setView("Summary")}
+            className={view === "Home" ? "active" : ""}
+            onClick={() => setView("Home")}
           >
-            Summary
+            <House aria-hidden="true" />
+            Home
           </button>
+          <button
+            className={view === "Inbox" ? "active" : ""}
+            onClick={() => openInbox()}
+          >
+            <InboxIcon aria-hidden="true" />
+            Inbox
+          </button>
+          <button
+            className={view === "Sources" ? "active" : ""}
+            onClick={() => setView("Sources")}
+          >
+            <Database aria-hidden="true" />
+            Sources
+          </button>
+          <div className="nav-section-label">System</div>
           <button
             className={view === "Settings" ? "active" : ""}
             onClick={() => setView("Settings")}
           >
+            <SettingsIcon aria-hidden="true" />
             Settings
           </button>
         </nav>
@@ -398,73 +489,195 @@ export default function App() {
         <main className="main">
         {isTaskView ? (
           <>
+            <div className="inbox-header">
+              <div>
+                <div className="eyebrow">Tasks</div>
+                <h1>Inbox</h1>
+              </div>
+              <div className="task-filters" aria-label="Task filters">
+                {TASK_FILTERS.map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    className={taskFilter === filter ? "active" : ""}
+                    onClick={() => {
+                      setTaskFilter(filter);
+                      setSelectedId(null);
+                      setDetail(null);
+                    }}
+                  >
+                    {filter}
+                  </button>
+                ))}
+              </div>
+            </div>
             {error ? <div className="error">{error}</div> : null}
 
             <div className="list">
               {tasks.length === 0 ? (
-                <div className="empty-list">No tasks in {view}.</div>
+                <div className="empty-list">No tasks in {taskFilter}.</div>
               ) : (
-                tasks.map((t) => (
-                  <button
-                    key={t.id}
-                    className={`task ${selectedId === t.id ? "selected" : ""}`}
-                    onClick={() => setSelectedId(t.id)}
-                  >
-                    <div className="task-title">{t.title}</div>
-                    <div className="task-meta">
-                      <span className="pill">{shortId(t.id)}</span>
-                      <span className="pill">{t.status}</span>
-                      <span className={`pill ${sourceClass(t.source)}`}>
-                        {t.source}
-                      </span>
-                      {outcomeLabel(t.sync_outcome) ? (
-                        <span className={`pill outcome-${t.sync_outcome}`}>
-                          {outcomeLabel(t.sync_outcome)}
-                        </span>
-                      ) : null}
-                      {t.project ? (
-                        <span className="pill">{t.project}</span>
-                      ) : null}
-                      {t.confidence != null ? (
-                        <span className="pill">
-                          conf {(t.confidence * 100).toFixed(0)}%
-                        </span>
-                      ) : null}
-                    </div>
-                  </button>
+                tasks.map((task) => (
+                  <TaskPreview
+                    key={task.id}
+                    task={task}
+                    selected={selectedId === task.id}
+                    onOpen={() => setSelectedId(task.id)}
+                  />
                 ))
               )}
             </div>
           </>
         ) : null}
 
-        {view === "Summary" ? (
-          <div className="panel-page">
-            <div className="toolbar">
-              <strong>Today’s summary</strong>
-              <button
-                type="button"
-                className="primary"
-                onClick={() =>
-                  void generateSummary()
-                    .then(setSummaryText)
-                    .catch((e) => setError(String(e)))
-                }
-              >
-                Generate
-              </button>
-              <button type="button" onClick={() => void refreshSummary()}>
-                Reload
+        {view === "Home" ? (
+          <div className="panel-page home-panel px-10 py-5">
+            <div className="home-header">
+              <div>
+                <div className="eyebrow">Dashboard</div>
+                <h1>What needs your attention?</h1>
+                <p>Pick up where you left off, review new work, or see today at a glance.</p>
+              </div>
+              <button type="button" className="primary" onClick={() => openInbox()}>
+                Open inbox
               </button>
             </div>
             {error ? <div className="error">{error}</div> : null}
-            <pre className="panel-body">{summaryText}</pre>
+            <div className="home-grid">
+              <section className="home-card home-card-focus home-card-wide">
+                <div className="home-card-heading">
+                  <div>
+                    <h2>Focus now</h2>
+                    <p>Today’s work and sessions that are still in progress.</p>
+                  </div>
+                  <button type="button" className="text-button" onClick={() => openInbox("Today")}>View today</button>
+                </div>
+                <div className="home-task-list">
+                  {focusTasks.length ? focusTasks.map((task) => (
+                    <TaskPreview key={task.id} task={task} compact onOpen={() => openTask(task)} />
+                  )) : <div className="home-empty">No active focus yet. Move a task to Today when you’re ready to start.</div>}
+                </div>
+              </section>
+
+              <section className="home-card home-card-triage">
+                <div className="home-card-heading">
+                  <div>
+                    <h2>Needs triage</h2>
+                    <p>{inboxCount === 1 ? "1 task is waiting in Inbox." : `${inboxCount} tasks are waiting in Inbox.`}</p>
+                  </div>
+                  <button type="button" className="text-button" onClick={() => openInbox("Inbox")}>Review</button>
+                </div>
+                <div className="home-task-list">
+                  {inboxTasks.length ? inboxTasks.map((task) => (
+                    <TaskPreview key={task.id} task={task} compact onOpen={() => openTask(task)} />
+                  )) : <div className="home-empty">Your Inbox is clear.</div>}
+                </div>
+              </section>
+
+              <section className="home-card home-card-continue">
+                <div className="home-card-heading">
+                  <div>
+                    <h2>Continue working</h2>
+                    <p>Recently updated unfinished tasks.</p>
+                  </div>
+                  <button type="button" className="text-button" onClick={() => openInbox("All")}>View all</button>
+                </div>
+                <div className="home-task-list">
+                  {recentTasks.length ? recentTasks.map((task) => (
+                    <TaskPreview key={task.id} task={task} compact onOpen={() => openTask(task)} />
+                  )) : <div className="home-empty">No unfinished tasks to continue.</div>}
+                </div>
+              </section>
+
+              <section className="home-card home-card-sources">
+                <div className="home-card-heading">
+                  <div>
+                    <h2>Source health</h2>
+                    <p>Session tracking is private and local by default.</p>
+                  </div>
+                  <button type="button" className="text-button" onClick={() => setView("Sources")}>Manage</button>
+                </div>
+                <div className="source-statuses">
+                  <div><span className={`source-indicator ${settings?.claude_enabled ? "enabled" : ""}`} />Claude <span>{settings?.claude_enabled ? "Watching" : "Off"}</span></div>
+                  <div><span className={`source-indicator ${settings?.codex_enabled ? "enabled" : ""}`} />Codex <span>{settings?.codex_enabled ? "Watching" : "Off"}</span></div>
+                </div>
+              </section>
+
+              <section className="home-card home-card-recap home-card-wide">
+                <div className="home-card-heading">
+                  <div>
+                    <h2>Today’s recap</h2>
+                    <p>Your saved daily summary.</p>
+                  </div>
+                </div>
+                <p className="summary-preview">{summaryText}</p>
+              </section>
+            </div>
+          </div>
+        ) : null}
+
+        {view === "Sources" ? (
+          <div className="panel-page">
+            <div className="toolbar panel-header">
+              <strong>Sources</strong>
+              <button type="button" onClick={() => void refreshSettings()}>
+                Refresh
+              </button>
+            </div>
+            {error ? <div className="error">{error}</div> : null}
+            {!settings ? (
+              <div className="empty-list">Loading sources…</div>
+            ) : (
+              <div className="sources-page">
+                <div className="sources-intro">
+                  <div className="eyebrow">Local session tracking</div>
+                  <h1>Connect the work you already do.</h1>
+                  <p>Pulse only reads Claude and Codex sessions after you turn their source on. Your source data stays on this device.</p>
+                </div>
+                <section className="source-card">
+                  <div>
+                    <h2>Claude</h2>
+                    <p>Watch local Claude session files and infer task candidates with their evidence.</p>
+                  </div>
+                  <label className="toggle source-toggle">
+                    <span>{settings.claude_enabled ? "Watching" : "Off"}</span>
+                    <input
+                      type="checkbox"
+                      checked={settings.claude_enabled}
+                      onChange={(e) =>
+                        void setSourceEnabled("claude", e.target.checked)
+                          .then(refreshSettings)
+                          .catch((err) => setError(String(err)))
+                      }
+                    />
+                  </label>
+                </section>
+                <section className="source-card">
+                  <div>
+                    <h2>Codex</h2>
+                    <p>Watch local Codex session files and infer task candidates with their evidence.</p>
+                  </div>
+                  <label className="toggle source-toggle">
+                    <span>{settings.codex_enabled ? "Watching" : "Off"}</span>
+                    <input
+                      type="checkbox"
+                      checked={settings.codex_enabled}
+                      onChange={(e) =>
+                        void setSourceEnabled("codex", e.target.checked)
+                          .then(refreshSettings)
+                          .catch((err) => setError(String(err)))
+                      }
+                    />
+                  </label>
+                </section>
+              </div>
+            )}
           </div>
         ) : null}
 
         {view === "Settings" ? (
           <div className="panel-page">
-            <div className="toolbar">
+            <div className="toolbar panel-header">
               <strong>Settings</strong>
               <button type="button" onClick={() => void refreshSettings()}>
                 Refresh
@@ -475,34 +688,6 @@ export default function App() {
               <div className="empty-list">Loading settings…</div>
             ) : (
               <div className="settings">
-                <section>
-                  <h3>Sources</h3>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.claude_enabled}
-                      onChange={(e) =>
-                        void setSourceEnabled("claude", e.target.checked)
-                          .then(refreshSettings)
-                          .catch((err) => setError(String(err)))
-                      }
-                    />
-                    Claude session tracking
-                  </label>
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={settings.codex_enabled}
-                      onChange={(e) =>
-                        void setSourceEnabled("codex", e.target.checked)
-                          .then(refreshSettings)
-                          .catch((err) => setError(String(err)))
-                      }
-                    />
-                    Codex session tracking
-                  </label>
-                </section>
-
                 <section>
                   <h3>Privacy / LLM</h3>
                   <p className="muted">
@@ -581,14 +766,9 @@ export default function App() {
         ) : null}
         </main>
 
+        {isTaskView ? (
         <aside className="detail">
-        {!isTaskView ? (
-          <div className="empty">
-            {view === "Summary"
-              ? "Generate a clean end-of-day recap from your task list."
-              : "Toggle sources, privacy, and export history."}
-          </div>
-        ) : !detail ? (
+        {!detail ? (
           <div className="empty">Select a task to see detail and evidence.</div>
         ) : (
           <>
@@ -675,6 +855,7 @@ export default function App() {
           </>
         )}
         </aside>
+        ) : null}
 
       </div>
       {captureOpen ? (
@@ -699,7 +880,7 @@ export default function App() {
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               onKeyDown={(event) => { if (event.key === "Escape") setCaptureOpen(false); }}
-              placeholder={view === "Today" ? "Add a task for today…" : "What needs your attention?"}
+              placeholder={taskFilter === "Today" ? "Add a task for today…" : "What needs your attention?"}
             />
             <div className="capture-dialog-actions">
               <button type="button" onClick={() => setCaptureOpen(false)}>Cancel</button>
