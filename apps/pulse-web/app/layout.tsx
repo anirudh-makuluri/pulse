@@ -8,7 +8,7 @@ const geist = Geist({
   subsets: ["latin"],
 });
 
-const title = "Pulse — The activity layer for your work";
+const title = "Pulse - The activity layer for your work";
 const description =
   "Pulse turns activity across your tools into a clear view of what is in progress, what needs attention, and what to do next.";
 
@@ -43,7 +43,7 @@ export async function generateMetadata(): Promise<Metadata> {
               url: socialImage,
               width: 1200,
               height: 630,
-              alt: "Pulse — The activity layer for your work",
+              alt: "Pulse - The activity layer for your work",
             },
           ]
         : undefined,
