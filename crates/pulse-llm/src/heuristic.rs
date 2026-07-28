@@ -43,6 +43,9 @@ impl LlmClient for HeuristicClient {
                     proposed_status: Some("Inbox".into()),
                     evidence_snippet: Some(snippet),
                     match_task_id: None,
+                    source_session_id: None,
+                    sync_outcome: Some("unclear".into()),
+                    sync_outcome_confidence: Some(0.0),
                 });
             }
         }
@@ -56,10 +59,11 @@ impl LlmClient for HeuristicClient {
                     confidence: 0.35,
                     suggested_next_action: None,
                     proposed_status: Some("Inbox".into()),
-                    evidence_snippet: Some(
-                        req.candidate_text.chars().take(200).collect(),
-                    ),
+                    evidence_snippet: Some(req.candidate_text.chars().take(200).collect()),
                     match_task_id: None,
+                    source_session_id: None,
+                    sync_outcome: Some("unclear".into()),
+                    sync_outcome_confidence: Some(0.0),
                 });
             }
         }
@@ -103,14 +107,15 @@ fn line_to_title(line: &str) -> Option<String> {
     let lower = raw.to_ascii_lowercase();
 
     // Checklist
-    if let Some(rest) = raw.strip_prefix("- [ ]").or_else(|| raw.strip_prefix("* [ ]")) {
+    if let Some(rest) = raw
+        .strip_prefix("- [ ]")
+        .or_else(|| raw.strip_prefix("* [ ]"))
+    {
         return clean_title(rest);
     }
     if lower.contains("todo:") || lower.contains("todo ") {
         if let Some(idx) = lower.find("todo") {
-            let rest = raw[idx..].trim_start_matches(|c: char| {
-                c.is_ascii_alphabetic() || c == ':'
-            });
+            let rest = raw[idx..].trim_start_matches(|c: char| c.is_ascii_alphabetic() || c == ':');
             return clean_title(rest);
         }
     }
@@ -215,7 +220,8 @@ mod tests {
             source_ref: "x".into(),
             session_id: "s".into(),
             project: Some("app".into()),
-            candidate_text: "[user] Please implement the export CSV button for reports\nnoise".into(),
+            candidate_text: "[user] Please implement the export CSV button for reports\nnoise"
+                .into(),
             max_candidates: 5,
         };
         let out = h.infer_tasks(&req).unwrap();

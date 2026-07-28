@@ -1,6 +1,6 @@
 //! Inference pipeline: discover → extract → LLM/heuristic → Inbox + evidence + check-ins.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -8,17 +8,38 @@ use std::time::{Duration, Instant};
 
 use chrono::{Local, Timelike, Utc};
 use pulse_core::{
-    compute_dedup_key, Config, NewCheckIn, NewEvidence, NewTask, SourceWatermark, Store,
-    TaskSource, TaskStatus, TaskUpdate, CheckInKind,
+    compute_dedup_key, CheckInKind, Config, NewCheckIn, NewEvidence, NewSession, NewTask,
+    SourceWatermark, Store, SyncOutcome, TaskSource, TaskStatus, TaskUpdate,
 };
 use pulse_llm::{
     redact_for_remote, resolve_llm_client, HeuristicClient, InferRequest, LlmClient, SummaryRequest,
 };
-use pulse_sources::{ClaudeSource, CodexSource, DiscoveredArtifact, SourceAdapter, SourceId};
+use pulse_sources::{
+    ClaudeSource, CodexSource, DiscoveredArtifact, ExtractedBatch, SourceAdapter, SourceId,
+};
+use uuid::Uuid;
 
 pub struct PipelineHandle {
     stop: Arc<AtomicBool>,
     join: Option<thread::JoinHandle<()>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RecentSessionSyncResult {
+    pub sessions_reviewed: u32,
+    pub sessions_already_imported: u32,
+    pub tasks_created: u32,
+    pub tasks_updated: u32,
+    pub sessions_without_actionable_work: u32,
+    pub sources_checked: Vec<String>,
+}
+
+struct SessionSyncInput {
+    batch: ExtractedBatch,
+    external_id: String,
+    existing_session_id: Option<Uuid>,
+    existing_task_id: Option<Uuid>,
+    redacted_text: String,
 }
 
 impl PipelineHandle {
@@ -39,9 +60,6 @@ pub fn start_pipeline(
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = Arc::clone(&stop);
     let join = thread::spawn(move || {
-        let mut last_seen: HashMap<String, Instant> = HashMap::new();
-        let mut hour_inserts: u32 = 0;
-        let mut hour_start = Instant::now();
         let mut last_summary_day = String::new();
 
         while !stop2.load(Ordering::SeqCst) {
@@ -50,16 +68,11 @@ pub fn start_pipeline(
                 Err(_) => break,
             };
 
-            if cfg.inference.enabled {
-                if hour_start.elapsed() > Duration::from_secs(3600) {
-                    hour_inserts = 0;
-                    hour_start = Instant::now();
-                }
-
-                if let Ok(mut store) = store.lock() {
-                    let _ = run_once(&mut store, &cfg, &mut last_seen, &mut hour_inserts);
-                    maybe_auto_summary(&mut store, &cfg, &mut last_summary_day);
-                }
+            if let Ok(mut store) = store.lock() {
+                // Transcript analysis is intentionally user initiated. The old
+                // background path turned archival conversation into a noisy
+                // Inbox before the user had a chance to review it.
+                maybe_auto_summary(&mut store, &cfg, &mut last_summary_day);
             }
 
             let slice = Duration::from_millis(200);
@@ -76,6 +89,305 @@ pub fn start_pipeline(
         stop,
         join: Some(join),
     }
+}
+
+/// Review at most the five most recently modified session transcripts from
+/// each enabled source. Each source is sent in a single labelled LLM batch so
+/// the model can produce one Inbox entry and outcome per source session.
+pub fn sync_recent_sessions(
+    store: &mut Store,
+    cfg: &Config,
+) -> Result<RecentSessionSyncResult, String> {
+    if !cfg.inference.enabled {
+        return Err("Session sync is disabled in Pulse settings.".into());
+    }
+
+    let client = resolve_llm_client(&cfg.llm, &cfg.privacy);
+    if client.backend_id() == "heuristic" {
+        return Err(
+            "Session sync requires a configured agent CLI and remote-LLM acknowledgement; heuristic extraction is disabled for this action."
+                .into(),
+        );
+    }
+
+    let max_bytes = cfg.inference.max_candidate_text_bytes as usize;
+    let mut adapters: Vec<Box<dyn SourceAdapter>> = Vec::new();
+    if cfg.sources.claude.enabled {
+        let mut source = ClaudeSource::from_env(max_bytes);
+        source.extra_roots = cfg
+            .sources
+            .claude
+            .extra_roots
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        adapters.push(Box::new(source));
+    }
+    if cfg.sources.codex.enabled {
+        let mut source = CodexSource::from_env(max_bytes);
+        source.extra_roots = cfg
+            .sources
+            .codex
+            .extra_roots
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        adapters.push(Box::new(source));
+    }
+    if adapters.is_empty() {
+        return Err("Enable Claude or Codex session tracking before syncing.".into());
+    }
+
+    let mut result = RecentSessionSyncResult {
+        sessions_reviewed: 0,
+        sessions_already_imported: 0,
+        tasks_created: 0,
+        tasks_updated: 0,
+        sessions_without_actionable_work: 0,
+        sources_checked: Vec::new(),
+    };
+
+    for adapter in adapters {
+        let source_name = adapter.id().as_str().to_string();
+        result.sources_checked.push(source_name.clone());
+        let mut artifacts = adapter.discover().map_err(|e| e.to_string())?;
+        artifacts.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+
+        let task_source = match adapter.id() {
+            SourceId::Claude => TaskSource::Claude,
+            SourceId::Codex => TaskSource::Codex,
+        };
+        let mut inputs = Vec::new();
+
+        for artifact in artifacts.into_iter().take(5) {
+            result.sessions_reviewed += 1;
+            let external_id = format!("{source_name}:{}", artifact.session_id);
+            let existing = store
+                .get_session_by_external_id(&external_id)
+                .map_err(|e| e.to_string())?;
+            if existing.is_some() {
+                result.sessions_already_imported += 1;
+            }
+
+            let batch = adapter
+                .extract(&artifact, Some(0))
+                .map_err(|e| e.to_string())?;
+            if batch.candidate_text.trim().is_empty() {
+                result.sessions_without_actionable_work += 1;
+                continue;
+            }
+
+            let redacted = redact_for_remote(&batch.candidate_text);
+            inputs.push(SessionSyncInput {
+                batch,
+                external_id,
+                existing_session_id: existing.as_ref().map(|session| session.id),
+                existing_task_id: existing.map(|session| session.task_id),
+                redacted_text: session_excerpt(&redacted.text, 4_000),
+            });
+        }
+
+        if inputs.is_empty() {
+            continue;
+        }
+
+        let candidate_text = inputs
+            .iter()
+            .map(|input| {
+                format!(
+                    "SOURCE SESSION\nsource_session_id: {}\nsource_ref: {}\nproject: {}\nBEGIN TRANSCRIPT\n{}\nEND TRANSCRIPT",
+                    input.batch.session_id,
+                    input.batch.source_ref,
+                    input.batch.project.as_deref().unwrap_or("unknown"),
+                    input.redacted_text,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let candidates = client
+            .infer_tasks(&InferRequest {
+                source: source_name.clone(),
+                source_ref: format!("manual_session_sync:{source_name}"),
+                session_id: "batch".into(),
+                project: None,
+                candidate_text,
+                max_candidates: inputs.len(),
+            })
+            .map_err(|e| format!("{source_name} session analysis failed: {e}"))?;
+
+        let inputs_by_session: HashMap<&str, usize> = inputs
+            .iter()
+            .enumerate()
+            .map(|(index, input)| (input.batch.session_id.as_str(), index))
+            .collect();
+        let mut handled_sessions = HashSet::new();
+
+        for candidate in candidates {
+            let Some(session_id) = candidate.source_session_id.as_deref() else {
+                continue;
+            };
+            let Some(&input_index) = inputs_by_session.get(session_id) else {
+                continue;
+            };
+            if handled_sessions.contains(session_id) {
+                continue;
+            }
+
+            let input = &inputs[input_index];
+            let title = candidate.title.trim();
+            if title.chars().count() < 12 {
+                continue;
+            }
+            handled_sessions.insert(session_id.to_owned());
+            let outcome = parse_sync_outcome(candidate.sync_outcome.as_deref());
+            let outcome_confidence = candidate
+                .sync_outcome_confidence
+                .unwrap_or(candidate.confidence)
+                .clamp(0.0, 1.0);
+            let dedup = compute_dedup_key(task_source, &input.batch.session_id, title);
+            let task = if let Some(task_id) = input.existing_task_id {
+                // Preserve the user's workflow state. Sync only refreshes the
+                // AI-written summary, next action, and observed outcome.
+                let task = store
+                    .update_task(
+                        task_id,
+                        TaskUpdate {
+                            title: Some(title.to_string()),
+                            notes: candidate.notes.clone(),
+                            project: input.batch.project.clone(),
+                            suggested_next_action: candidate.suggested_next_action.clone(),
+                            confidence: Some(candidate.confidence.clamp(0.0, 1.0)),
+                            sync_outcome: Some(outcome),
+                            sync_outcome_confidence: Some(outcome_confidence),
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                result.tasks_updated += 1;
+                task
+            } else if let Some(existing) =
+                store.find_by_dedup_key(&dedup).map_err(|e| e.to_string())?
+            {
+                let task = store
+                    .update_task(
+                        existing.id,
+                        TaskUpdate {
+                            notes: candidate.notes.clone(),
+                            project: input.batch.project.clone(),
+                            suggested_next_action: candidate.suggested_next_action.clone(),
+                            confidence: Some(candidate.confidence.clamp(0.0, 1.0)),
+                            sync_outcome: Some(outcome),
+                            sync_outcome_confidence: Some(outcome_confidence),
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                result.tasks_updated += 1;
+                task
+            } else {
+                let mut task = NewTask::manual(title);
+                task.status = TaskStatus::Inbox;
+                task.source = task_source;
+                task.confidence = Some(candidate.confidence.clamp(0.0, 1.0));
+                task.project = input.batch.project.clone();
+                task.notes = candidate.notes.clone();
+                task.suggested_next_action = candidate.suggested_next_action.clone();
+                task.dedup_key = Some(dedup);
+                task.source_session_id = Some(input.batch.session_id.clone());
+                task.sync_outcome = Some(outcome);
+                task.sync_outcome_confidence = Some(outcome_confidence);
+                let task = store.create_task(task).map_err(|e| e.to_string())?;
+                result.tasks_created += 1;
+                task
+            };
+
+            let snippet = candidate
+                .evidence_snippet
+                .map(|text| redact_for_remote(&text).text)
+                .or_else(|| Some(input.redacted_text.chars().take(200).collect()));
+            store
+                .add_evidence(NewEvidence {
+                    task_id: task.id,
+                    kind: "session_snippet".into(),
+                    source_ref: input.batch.source_ref.clone(),
+                    snippet,
+                    metadata_json: Some(
+                        serde_json::json!({
+                            "backend": client.backend_id(),
+                            "outcome": outcome.as_str(),
+                            "outcome_confidence": outcome_confidence,
+                        })
+                        .to_string(),
+                    ),
+                    observed_at: Utc::now(),
+                })
+                .map_err(|e| e.to_string())?;
+
+            let session_id = if let Some(session_id) = input.existing_session_id {
+                session_id
+            } else {
+                let started_at =
+                    chrono::DateTime::<Utc>::from_timestamp_millis(input.batch.mtime_ms)
+                        .unwrap_or_else(Utc::now);
+                store
+                    .create_session(NewSession {
+                        task_id: task.id,
+                        agent: Some(source_name.clone()),
+                        application: Some(source_name.clone()),
+                        repository_path: input.batch.project.clone(),
+                        external_id: Some(input.external_id.clone()),
+                        source_ref: Some(input.batch.source_ref.clone()),
+                        started_at,
+                        ended_at: Some(started_at),
+                        metadata_json: serde_json::json!({
+                            "sync": "manual_recent_sessions",
+                            "path": input.batch.path,
+                        })
+                        .to_string(),
+                    })
+                    .map_err(|e| e.to_string())?
+                    .id
+            };
+            let _ = store.record_event(pulse_core::NewActivityEvent {
+                task_id: task.id,
+                session_id: Some(session_id),
+                kind: "session_synced".into(),
+                summary: format!("Reviewed {source_name} session for Inbox"),
+                payload_json: Some(
+                    serde_json::json!({
+                        "source_ref": input.batch.source_ref,
+                        "outcome": outcome.as_str(),
+                    })
+                    .to_string(),
+                ),
+                source_ref: Some("manual_session_sync".into()),
+                occurred_at: Utc::now(),
+            });
+        }
+
+        result.sessions_without_actionable_work += (inputs.len() - handled_sessions.len()) as u32;
+    }
+
+    Ok(result)
+}
+
+fn session_excerpt(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+
+    let head_len = max_chars / 4;
+    let tail_len = max_chars - head_len;
+    let head: String = text.chars().take(head_len).collect();
+    let tail: String = text.chars().skip(count.saturating_sub(tail_len)).collect();
+    format!("{head}\n… [middle omitted] …\n{tail}")
+}
+
+fn parse_sync_outcome(value: Option<&str>) -> SyncOutcome {
+    value
+        .and_then(SyncOutcome::parse)
+        .unwrap_or(SyncOutcome::Unclear)
 }
 
 fn maybe_auto_summary(store: &mut Store, cfg: &Config, last_day: &mut String) {
@@ -266,9 +578,7 @@ pub fn run_once(
                     store.resolve_task(mid).ok()
                 } else {
                     let dedup = compute_dedup_key(source, &batch.session_id, title);
-                    store
-                        .find_by_dedup_key(&dedup)
-                        .map_err(|e| e.to_string())?
+                    store.find_by_dedup_key(&dedup).map_err(|e| e.to_string())?
                 };
 
                 if let Some(task) = existing {

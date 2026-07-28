@@ -67,9 +67,20 @@ ALTER TABLE pulse_embeddings
   ALTER COLUMN embedding SET DATA TYPE VECTOR(384);
 ```
 
-## Still required
+## AWS sync API and semantic retrieval
 
-The Workstream 5 Lambda API will validate the sync token, apply these records
-idempotently to CockroachDB, and return semantic search results. After that
-endpoint is live, configure CockroachDB Managed MCP Server with the separate
-read-only identity.
+Workstream 5 is implemented under [`infra/aws`](../infra/aws). Terraform
+creates the authenticated API Gateway + Lambda sync API, a private versioned S3
+archive, CloudWatch retention, and a secret containing the CockroachDB write
+connection and generated bearer token. Follow its [deployment guide](../infra/aws/README.md).
+
+The desktop creates MiniLM embeddings only for approved structured activities,
+checkpoints, memories, and reminders. It sends them with the existing outbox
+batch; Lambda validates their 384 dimensions, idempotently writes them, and
+serves cosine search at `POST /v1/pulse/search` with `{ "embedding": [...],
+"limit": 10 }`. Raw checkpoint JSON is archived by Lambda. Explicitly
+approved handoff packages, logs, diffs, and screenshots receive short-lived
+pre-signed upload URLs from `POST /v1/pulse/artifacts/upload-url`.
+
+After deployment, configure CockroachDB Managed MCP Server with the separate
+read-only identity; do not use the Lambda write credential there.

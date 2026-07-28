@@ -86,7 +86,9 @@ pub fn find_on_path(name: &str) -> Option<PathBuf> {
 fn candidate_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        for ext in ["", ".exe", ".cmd", ".bat"] {
+        // npm installs both an extensionless POSIX shell shim and a Windows
+        // .cmd shim. The former cannot be launched by CreateProcess.
+        for ext in [".exe", ".cmd", ".bat", ""] {
             let p = dir.join(format!("{name}{ext}"));
             if p.is_file() {
                 return Some(p);

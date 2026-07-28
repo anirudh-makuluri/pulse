@@ -19,6 +19,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pulse-core = { path = "../../../crates/pulse-core" }
 pulse-llm = { path = "../../../crates/pulse-llm" }
+pulse-service = { path = "../../../crates/pulse-service" }
 chrono = { version = "0.4", features = ["serde", "clock"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tauri-plugin-notification = "2"

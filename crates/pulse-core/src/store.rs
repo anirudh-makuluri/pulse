@@ -7,7 +7,7 @@ use crate::models::{
     ActivityEvent, Artifact, CheckIn, CheckInKind, CheckInStatus, Checkpoint, Evidence, Memory,
     NewActivityEvent, NewArtifact, NewCheckIn, NewCheckpoint, NewEvidence, NewMemory, NewReminder,
     NewSession, NewTask, Reminder, ReminderStatus, Session, SourceWatermark, Summary,
-    SyncOutboxItem, Task, TaskSource, TaskStatus, TaskUpdate,
+    SyncOutboxItem, SyncOutcome, Task, TaskSource, TaskStatus, TaskUpdate,
 };
 use crate::state::validate_transition;
 
@@ -40,6 +40,13 @@ impl Store {
                 return Err(PulseError::Validation("confidence must be in [0,1]".into()));
             }
         }
+        if let Some(c) = new.sync_outcome_confidence {
+            if !(0.0..=1.0).contains(&c) {
+                return Err(PulseError::Validation(
+                    "sync outcome confidence must be in [0,1]".into(),
+                ));
+            }
+        }
 
         let now = Utc::now();
         let id = Uuid::new_v4();
@@ -54,11 +61,11 @@ impl Store {
             INSERT INTO tasks (
               id, title, status, source, confidence, project, notes,
               suggested_next_action, dedup_key, source_session_id,
-              created_at, updated_at, completed_at
+              sync_outcome, sync_outcome_confidence, created_at, updated_at, completed_at
             ) VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7,
               ?8, ?9, ?10,
-              ?11, ?12, ?13
+              ?11, ?12, ?13, ?14, ?15
             )
             "#,
             params![
@@ -72,6 +79,8 @@ impl Store {
                 new.suggested_next_action,
                 new.dedup_key,
                 new.source_session_id,
+                new.sync_outcome.map(|outcome| outcome.as_str()),
+                new.sync_outcome_confidence,
                 now.to_rfc3339(),
                 now.to_rfc3339(),
                 completed_at.map(|t| t.to_rfc3339()),
@@ -90,7 +99,7 @@ impl Store {
             r#"
             SELECT id, title, status, source, confidence, project, notes,
                    suggested_next_action, dedup_key, source_session_id,
-                   created_at, updated_at, completed_at
+                   sync_outcome, sync_outcome_confidence, created_at, updated_at, completed_at
             FROM tasks WHERE id = ?1
             "#,
         )?;
@@ -107,7 +116,7 @@ impl Store {
                 r#"
                 SELECT id, title, status, source, confidence, project, notes,
                        suggested_next_action, dedup_key, source_session_id,
-                       created_at, updated_at, completed_at
+                       sync_outcome, sync_outcome_confidence, created_at, updated_at, completed_at
                 FROM tasks WHERE status = ?1
                 ORDER BY updated_at DESC
                 "#,
@@ -121,7 +130,7 @@ impl Store {
                 r#"
                 SELECT id, title, status, source, confidence, project, notes,
                        suggested_next_action, dedup_key, source_session_id,
-                       created_at, updated_at, completed_at
+                       sync_outcome, sync_outcome_confidence, created_at, updated_at, completed_at
                 FROM tasks
                 ORDER BY updated_at DESC
                 "#,
@@ -175,6 +184,17 @@ impl Store {
             }
             task.confidence = Some(c);
         }
+        if let Some(outcome) = update.sync_outcome {
+            task.sync_outcome = Some(outcome);
+        }
+        if let Some(confidence) = update.sync_outcome_confidence {
+            if !(0.0..=1.0).contains(&confidence) {
+                return Err(PulseError::Validation(
+                    "sync outcome confidence must be in [0,1]".into(),
+                ));
+            }
+            task.sync_outcome_confidence = Some(confidence);
+        }
 
         task.updated_at = Utc::now();
 
@@ -187,8 +207,10 @@ impl Store {
               project = ?5,
               notes = ?6,
               suggested_next_action = ?7,
-              updated_at = ?8,
-              completed_at = ?9
+              sync_outcome = ?8,
+              sync_outcome_confidence = ?9,
+              updated_at = ?10,
+              completed_at = ?11
             WHERE id = ?1
             "#,
             params![
@@ -199,6 +221,8 @@ impl Store {
                 task.project,
                 task.notes,
                 task.suggested_next_action,
+                task.sync_outcome.map(|outcome| outcome.as_str()),
+                task.sync_outcome_confidence,
                 task.updated_at.to_rfc3339(),
                 task.completed_at.map(|t| t.to_rfc3339()),
             ],
@@ -285,7 +309,7 @@ impl Store {
             r#"
             SELECT id, title, status, source, confidence, project, notes,
                    suggested_next_action, dedup_key, source_session_id,
-                   created_at, updated_at, completed_at
+                   sync_outcome, sync_outcome_confidence, created_at, updated_at, completed_at
             FROM tasks WHERE dedup_key = ?1
             "#,
         )?;
@@ -565,6 +589,19 @@ impl Store {
         self.conn.prepare(
             "SELECT id, task_id, agent, application, repository_path, external_id, source_ref, started_at, ended_at, created_at, metadata_json FROM sessions WHERE id = ?1",
         )?.query_row(params![id.to_string()], map_session).optional().map_err(Into::into)
+    }
+
+    /// Return a previously imported external session, if any. This makes an
+    /// explicit sync idempotent even when the LLM chooses a slightly different
+    /// title on a later run.
+    pub fn get_session_by_external_id(&self, external_id: &str) -> Result<Option<Session>> {
+        self.conn
+            .prepare(
+                "SELECT id, task_id, agent, application, repository_path, external_id, source_ref, started_at, ended_at, created_at, metadata_json FROM sessions WHERE external_id = ?1",
+            )?
+            .query_row(params![external_id], map_session)
+            .optional()
+            .map_err(Into::into)
     }
 
     pub fn list_sessions(&self, task_id: Uuid) -> Result<Vec<Session>> {
@@ -1132,10 +1169,18 @@ fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         suggested_next_action: row.get(7)?,
         dedup_key: row.get(8)?,
         source_session_id: row.get(9)?,
-        created_at: parse_dt(&row.get::<_, String>(10)?)?,
-        updated_at: parse_dt(&row.get::<_, String>(11)?)?,
+        sync_outcome: row
+            .get::<_, Option<String>>(10)?
+            .map(|value| {
+                SyncOutcome::parse(&value)
+                    .ok_or_else(|| bad_value(10, format!("bad sync outcome {value}")))
+            })
+            .transpose()?,
+        sync_outcome_confidence: row.get(11)?,
+        created_at: parse_dt(&row.get::<_, String>(12)?)?,
+        updated_at: parse_dt(&row.get::<_, String>(13)?)?,
         completed_at: row
-            .get::<_, Option<String>>(12)?
+            .get::<_, Option<String>>(14)?
             .map(|s| parse_dt(&s))
             .transpose()?,
     })

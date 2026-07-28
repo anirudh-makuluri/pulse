@@ -83,6 +83,8 @@ log_level = "info"
     let timeline = client
         .activities_timeline(&activity.id.to_string())
         .expect("timeline");
+    let activity_id = activity.id.to_string();
+    assert_eq!(timeline["task"]["id"].as_str(), Some(activity_id.as_str()));
     assert_eq!(timeline["sessions"].as_array().unwrap().len(), 1);
     assert_eq!(timeline["checkpoints"].as_array().unwrap().len(), 1);
 

@@ -1,11 +1,11 @@
 //! Pulse background service: named-pipe JSON-RPC server + source inference poller.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use std::collections::HashMap;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
@@ -135,7 +135,8 @@ fn start_reminder_scheduler(store: Arc<Mutex<Store>>) -> ReminderScheduler {
                             let payload = json!({
                                 "reminder_id": reminder.id,
                                 "actions": ["open_context", "continue_coding", "snooze", "done"],
-                            }).to_string();
+                            })
+                            .to_string();
                             let _ = store.record_event(pulse_core::NewActivityEvent {
                                 task_id: reminder.task_id,
                                 session_id: None,
@@ -150,15 +151,31 @@ fn start_reminder_scheduler(store: Arc<Mutex<Store>>) -> ReminderScheduler {
                     }
                 }
             }
-            for _ in 0..10 { if worker_stop.load(Ordering::SeqCst) { break; } thread::sleep(Duration::from_secs(1)); }
+            for _ in 0..10 {
+                if worker_stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                thread::sleep(Duration::from_secs(1));
+            }
         }
     });
-    ReminderScheduler { stop, handle: Some(handle) }
+    ReminderScheduler {
+        stop,
+        handle: Some(handle),
+    }
 }
 
-struct ReminderScheduler { stop: Arc<AtomicBool>, handle: Option<thread::JoinHandle<()>> }
+struct ReminderScheduler {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
 impl ReminderScheduler {
-    fn stop(mut self) { self.stop.store(true, Ordering::SeqCst); if let Some(handle) = self.handle.take() { let _ = handle.join(); } }
+    fn stop(mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 struct ServiceState {
@@ -258,6 +275,17 @@ impl RpcHandler for ServiceState {
                 write_config(&self.paths.config_path(), &cfg)
                     .map_err(|e| RpcErrorObject::new(RpcCode::ConfigError, e.to_string()))?;
                 Ok(json!({ "ok": true, "id": id, "enabled": enabled }))
+            }
+            "inference.sync_recent" => {
+                let cfg = self
+                    .config
+                    .lock()
+                    .map_err(|_| internal("config lock"))?
+                    .clone();
+                let mut store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let result = pipeline::sync_recent_sessions(&mut store, &cfg)
+                    .map_err(|e| RpcErrorObject::new(RpcCode::InvalidParams, e))?;
+                Ok(serde_json::to_value(result).unwrap_or_else(|_| json!({})))
             }
             "inference.run_once" => {
                 let cfg = self
@@ -439,6 +467,7 @@ impl RpcHandler for ServiceState {
                 let memories = store.list_memories(activity.id).map_err(map_store_err)?;
                 let artifacts = store.list_artifacts(activity.id).map_err(map_store_err)?;
                 Ok(json!({
+                    "task": activity,
                     "activity": activity,
                     "evidence": evidence,
                     "sessions": sessions,
@@ -520,6 +549,13 @@ impl RpcHandler for ServiceState {
                 let task = store.resolve_task(&id).map_err(map_store_err)?;
                 let task = store.mark_done(task.id).map_err(map_store_err)?;
                 Ok(json!({ "task": task }))
+            }
+            "tasks.delete" => {
+                let id = param_str(&params, "id")?;
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let task = store.resolve_task(&id).map_err(map_store_err)?;
+                store.delete_task(task.id).map_err(map_store_err)?;
+                Ok(json!({ "ok": true }))
             }
             _ => Err(RpcErrorObject::new(
                 RpcCode::MethodNotFound,

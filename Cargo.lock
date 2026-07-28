@@ -3836,6 +3836,7 @@ dependencies = [
  "notify-rust",
  "pulse-core",
  "pulse-llm",
+ "pulse-service",
  "serde",
  "serde_json",
  "tauri",

@@ -4,6 +4,11 @@
 .env
 .env.*
 !.env.example
+infra/aws/.terraform/
+infra/aws/terraform.tfstate*
+infra/aws/terraform.tfvars
+infra/aws/.build/
+infra/aws/lambda/node_modules/
 *.pdb
 .idea/
 .vscode/

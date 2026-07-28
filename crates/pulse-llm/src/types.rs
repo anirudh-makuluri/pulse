@@ -37,6 +37,14 @@ pub struct TaskCandidateOut {
     /// If set, update this open task instead of creating.
     #[serde(default)]
     pub match_task_id: Option<String>,
+    /// Required when a single LLM request contains multiple source sessions.
+    #[serde(default)]
+    pub source_session_id: Option<String>,
+    /// LLM-observed session outcome; it is never a command to mark a task done.
+    #[serde(default)]
+    pub sync_outcome: Option<String>,
+    #[serde(default)]
+    pub sync_outcome_confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone)]

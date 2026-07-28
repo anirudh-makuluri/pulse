@@ -54,7 +54,7 @@ Pulse is designed to be useful offline.
   installed on your `PATH`.
 - Remote CLI-backed inference requires an explicit privacy acknowledgement;
   otherwise Pulse uses local heuristics.
-- Cloud sync is an opt-in feature currently being built. It is not required
+- Cloud sync is an opt-in feature. It is not required
   for local tasks, reminders, or the desktop app.
 
 ## Product direction
@@ -63,9 +63,8 @@ The local activity timeline, pet omnibox, and reminder experience are complete.
 Pulse now supports quick task actions, a preview before selected text is saved,
 local reminder notifications, and clear handoffs back into an agent. The next
 milestone is **opt-in CockroachDB memory**: the CockroachDB schema, vector
-index, local MiniLM embeddings, and durable local outbox are ready. Next comes
-the AWS sync API and semantic retrieval. Later work adds structured continuity
-between agents.
+index, local MiniLM embeddings, durable local outbox, and Terraform-managed
+AWS sync API are ready. Later work adds structured continuity between agents.
 
 | Area | Status |
 |---|---|
@@ -73,12 +72,13 @@ between agents.
 | SQLite, CLI, background service, and named-pipe IPC | Complete |
 | Claude/Codex sources and agent-CLI summaries | Complete |
 | Pet omnibox and reminder experience | Complete |
-| Opt-in cloud memory and sync | In progress |
+| Opt-in cloud memory and sync | Complete |
 | Cross-agent handoff packages | Planned |
 
 See the [implementation roadmap](docs/implementation-roadmap.md) for the full
 workstream and acceptance criteria. Developers preparing the next cloud-memory
 milestone can follow the [CockroachDB memory setup](docs/cloud-memory-setup.md).
+The Terraform deployment guide is in [infra/aws](infra/aws/README.md).
 
 ## How it fits together
 

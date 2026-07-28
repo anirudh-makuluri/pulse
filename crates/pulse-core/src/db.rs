@@ -5,11 +5,12 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{PulseError, Result};
 
 /// Highest migration version this binary knows how to apply.
-pub const LATEST_SCHEMA_VERSION: i64 = 3;
+pub const LATEST_SCHEMA_VERSION: i64 = 4;
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../migrations/002_activity_timeline.sql");
 const MIGRATION_003: &str = include_str!("../migrations/003_sync_outbox.sql");
+const MIGRATION_004: &str = include_str!("../migrations/004_sync_outcome.sql");
 
 /// Open (or create) the SQLite database, enable pragmas, apply migrations.
 pub fn open(path: &Path) -> Result<Connection> {
@@ -71,6 +72,15 @@ fn migrate(conn: &Connection) -> Result<()> {
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
             [3i64],
+        )?;
+        tx.commit()?;
+    }
+    if current < 4 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_004)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
+            [4i64],
         )?;
         tx.commit()?;
     }

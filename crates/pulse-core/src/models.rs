@@ -45,6 +45,35 @@ impl std::fmt::Display for TaskStatus {
     }
 }
 
+/// The LLM's observation of a source session. It never changes the user's
+/// workflow state (Inbox, Today, Next, Waiting, Done) by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncOutcome {
+    InProgress,
+    Completed,
+    Unclear,
+}
+
+impl SyncOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Unclear => "unclear",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "in_progress" => Some(Self::InProgress),
+            "completed" => Some(Self::Completed),
+            "unclear" => Some(Self::Unclear),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskSource {
@@ -93,6 +122,8 @@ pub struct Task {
     pub suggested_next_action: Option<String>,
     pub dedup_key: Option<String>,
     pub source_session_id: Option<String>,
+    pub sync_outcome: Option<SyncOutcome>,
+    pub sync_outcome_confidence: Option<f64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -109,6 +140,8 @@ pub struct NewTask {
     pub suggested_next_action: Option<String>,
     pub dedup_key: Option<String>,
     pub source_session_id: Option<String>,
+    pub sync_outcome: Option<SyncOutcome>,
+    pub sync_outcome_confidence: Option<f64>,
 }
 
 impl NewTask {
@@ -123,6 +156,8 @@ impl NewTask {
             suggested_next_action: None,
             dedup_key: None,
             source_session_id: None,
+            sync_outcome: None,
+            sync_outcome_confidence: None,
         }
     }
 }
@@ -135,6 +170,8 @@ pub struct TaskUpdate {
     pub project: Option<String>,
     pub suggested_next_action: Option<String>,
     pub confidence: Option<f64>,
+    pub sync_outcome: Option<SyncOutcome>,
+    pub sync_outcome_confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

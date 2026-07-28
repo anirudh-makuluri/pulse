@@ -1,0 +1,11 @@
+{
+  "name": "pulse-sync-api",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.750.0",
+    "@aws-sdk/client-secrets-manager": "^3.750.0",
+    "@aws-sdk/s3-request-presigner": "^3.750.0",
+    "pg": "^8.13.3"
+  }
+}

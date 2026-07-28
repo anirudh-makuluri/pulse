@@ -55,15 +55,15 @@ storage and semantic retrieval remain to be implemented.
 
 ## Workstream 5: AWS durability layer
 
-18. [ ] Create a small AWS Lambda sync API that accepts queued Pulse events and
+18. [x] Create a small AWS Lambda sync API that accepts queued Pulse events and
     writes them to CockroachDB.
-19. [ ] Add Amazon S3 archival for raw checkpoint payloads, handoff packages, logs,
+19. [x] Add Amazon S3 archival for raw checkpoint payloads, handoff packages, logs,
     diffs, and screenshots.
-20. [ ] Make cloud sync retryable and non-blocking: local actions and reminders must
+20. [x] Make cloud sync retryable and non-blocking: local actions and reminders must
     continue working offline.
-21. [ ] Add a minimal deployment and configuration path, including environment
+21. [x] Add a minimal deployment and configuration path, including environment
     variable documentation.
-22. [ ] Implement the end-to-end vector flow: generate approved local MiniLM
+22. [x] Implement the end-to-end vector flow: generate approved local MiniLM
     embeddings for activities, checkpoints, memories, and reminders; sync them
     through Lambda; and expose cosine semantic retrieval.
 

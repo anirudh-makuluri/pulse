@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import {
   createTask,
+  deleteTask,
   exportHistory,
   generateSummary,
   getActivityTimeline,
@@ -18,6 +19,7 @@ import {
   serviceInfo,
   setSourceEnabled,
   setTaskStatus,
+  syncRecentSessions,
   type SettingsSnapshot,
 } from "./api";
 import type { ActivityTimeline, Reminder, Task, TaskStatus } from "./types";
@@ -50,6 +52,13 @@ function sourceClass(source: string): string {
   if (s === "claude") return "source-claude";
   if (s === "codex") return "source-codex";
   return "source-manual";
+}
+
+function outcomeLabel(outcome: Task["sync_outcome"]): string | null {
+  if (outcome === "in_progress") return "In progress";
+  if (outcome === "completed") return "Completed";
+  if (outcome === "unclear") return "Unclear";
+  return null;
 }
 
 type TimelineEntry = {
@@ -135,6 +144,7 @@ export default function App() {
   const [includeSelection, setIncludeSelection] = useState(false);
   const [due, setDue] = useState<Reminder[]>([]);
   const [omniboxBusy, setOmniboxBusy] = useState(false);
+  const [syncingSessions, setSyncingSessions] = useState(false);
   const notifiedDue = useRef(new Set<string>());
 
   const isTaskView = TASK_VIEWS.includes(view as (typeof TASK_VIEWS)[number]);
@@ -321,6 +331,37 @@ export default function App() {
     }
   }
 
+  async function deleteSelectedTask() {
+    if (!selectedId || !detail) return;
+    if (!window.confirm(`Delete “${detail.task.title}”? This also removes its local timeline and reminders.`)) return;
+    try {
+      await deleteTask(selectedId);
+      setSelectedId(null);
+      setDetail(null);
+      await refreshTasks();
+      setInfo("Task deleted.");
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function syncSessions() {
+    setSyncingSessions(true);
+    setError(null);
+    try {
+      const result = await syncRecentSessions();
+      setView("Inbox");
+      setTasks(await listTasks("Inbox"));
+      setInfo(
+        `Session sync: ${result.tasks_created} added, ${result.tasks_updated} updated from ${result.sessions_reviewed} reviewed.`,
+      );
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSyncingSessions(false);
+    }
+  }
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -350,9 +391,14 @@ export default function App() {
             Settings
           </button>
         </nav>
-        <div className="meta">
-          <div>{loading ? "Refreshing…" : "Live"}</div>
-          <div>{info}</div>
+        <div className="sidebar-footer">
+          <button className="session-sync" type="button" onClick={() => void syncSessions()} disabled={syncingSessions}>
+            {syncingSessions ? "Syncing sessions..." : "Sync latest sessions"}
+          </button>
+          <div className="meta">
+            <div>{loading ? "Refreshing…" : "Live"}</div>
+            <div>{info}</div>
+          </div>
         </div>
       </aside>
 
@@ -396,6 +442,11 @@ export default function App() {
                       <span className={`pill ${sourceClass(t.source)}`}>
                         {t.source}
                       </span>
+                      {outcomeLabel(t.sync_outcome) ? (
+                        <span className={`pill outcome-${t.sync_outcome}`}>
+                          {outcomeLabel(t.sync_outcome)}
+                        </span>
+                      ) : null}
                       {t.project ? (
                         <span className="pill">{t.project}</span>
                       ) : null}
@@ -572,6 +623,11 @@ export default function App() {
               <span className={`pill ${sourceClass(detail.task.source)}`}>
                 {detail.task.source}
               </span>
+              {outcomeLabel(detail.task.sync_outcome) ? (
+                <span className={`pill outcome-${detail.task.sync_outcome}`}>
+                  {outcomeLabel(detail.task.sync_outcome)}
+                </span>
+              ) : null}
               {detail.task.confidence != null ? (
                 <span className="pill">
                   conf {(detail.task.confidence * 100).toFixed(0)}%
@@ -586,6 +642,9 @@ export default function App() {
               <button onClick={() => void move("Inbox")}>Inbox</button>
               <button className="primary" onClick={() => void done()}>
                 Done
+              </button>
+              <button className="danger" onClick={() => void deleteSelectedTask()}>
+                Delete
               </button>
             </div>
 

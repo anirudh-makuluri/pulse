@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars. Do not commit the real file.
+aws_region                  = "us-west-2"
+name_prefix                 = "pulse"
+cockroach_connection_string = "postgresql://pulse_sync:replace-me@your-cluster.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full"
+archive_retention_days      = 365

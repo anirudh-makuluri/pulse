@@ -30,6 +30,15 @@ export async function executeOmnibox(input: string, selectedTaskId: string | nul
 }
 
 export async function dueReminders(): Promise<Reminder[]> { return invoke("due_reminders"); }
+export interface RecentSessionSyncResult {
+  sessions_reviewed: number;
+  sessions_already_imported: number;
+  tasks_created: number;
+  tasks_updated: number;
+  sessions_without_actionable_work: number;
+  sources_checked: string[];
+}
+export async function syncRecentSessions(): Promise<RecentSessionSyncResult> { return invoke("sync_recent_sessions"); }
 export async function reminderAction(id: string, action: "open_context" | "continue_coding" | "snooze" | "done"): Promise<Reminder> {
   return invoke("reminder_action", { id, action });
 }
@@ -73,6 +82,7 @@ export async function setTaskStatus(id: string, status: TaskStatus): Promise<Tas
 export async function markDone(id: string): Promise<Task> {
   return invoke<Task>("mark_done", { id });
 }
+export async function deleteTask(id: string): Promise<void> { return invoke("delete_task", { id }); }
 
 export async function serviceInfo(): Promise<string> {
   return invoke<string>("service_info");

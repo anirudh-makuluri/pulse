@@ -11,6 +11,8 @@ export interface Task {
   suggested_next_action: string | null;
   dedup_key: string | null;
   source_session_id: string | null;
+  sync_outcome: "in_progress" | "completed" | "unclear" | null;
+  sync_outcome_confidence: number | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;

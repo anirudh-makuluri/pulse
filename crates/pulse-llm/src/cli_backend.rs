@@ -21,7 +21,12 @@ pub struct CliLlmClient {
 }
 
 impl CliLlmClient {
-    pub fn new(kind: CliBackendKind, bin: PathBuf, timeout_secs: u64, model: Option<String>) -> Self {
+    pub fn new(
+        kind: CliBackendKind,
+        bin: PathBuf,
+        timeout_secs: u64,
+        model: Option<String>,
+    ) -> Self {
         let cwd = std::env::temp_dir().join(format!("pulse-llm-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&cwd);
         Self {
@@ -75,9 +80,13 @@ fn build_infer_prompt(req: &InferRequest) -> String {
     format!(
         r#"You extract work tasks from a coding-agent session excerpt.
 Return ONLY JSON of the form:
-{{"candidates":[{{"title":"string min 12 chars","notes":null,"confidence":0.0,"suggested_next_action":null,"proposed_status":"Inbox","evidence_snippet":"short quote","match_task_id":null}}]}}
+{{"candidates":[{{"title":"string min 12 chars","notes":"concise current-state message","confidence":0.0,"suggested_next_action":null,"proposed_status":"Inbox","evidence_snippet":"short quote","match_task_id":null,"source_session_id":null,"sync_outcome":"in_progress|completed|unclear","sync_outcome_confidence":0.0}}]}}
 Rules:
 - Max {max} candidates.
+- Return no candidates unless there is a concrete user-requested work item.
+- Never turn assistant narration, tool output, plans, logs, errors, or generic discussion into a task.
+- `sync_outcome` describes the session, not a command to complete the task.
+- When SESSION EXCERPT contains multiple labelled sessions, return at most one candidate per session and copy its exact `source_session_id`.
 - Prefer actionable user intents, not tool noise.
 - confidence 0-1.
 - proposed_status one of Inbox|Today|Next|Waiting|Done or null.
@@ -125,7 +134,7 @@ impl CliLlmClient {
                 .map_err(|e| LlmError::Backend(format!("write prompt: {e}")))?;
         }
 
-        let mut cmd = Command::new(&self.bin);
+        let mut cmd = command_for_backend(&self.bin);
         cmd.current_dir(&self.cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -156,10 +165,7 @@ impl CliLlmClient {
                 }
             }
             CliBackendKind::Claude => {
-                cmd.arg("-p")
-                    .arg(prompt)
-                    .arg("--output-format")
-                    .arg("text");
+                cmd.arg("-p").arg(prompt).arg("--output-format").arg("text");
                 // Empty allow list style: deny tools
                 cmd.arg("--disallowedTools")
                     .arg("Bash,Edit,Write,MultiEdit,NotebookEdit,Agent");
@@ -194,10 +200,51 @@ impl CliLlmClient {
     }
 }
 
-fn run_with_timeout(
-    mut cmd: Command,
-    timeout: Duration,
-) -> Result<std::process::Output> {
+/// npm's Windows shims are batch files, which `CreateProcess` cannot execute
+/// directly. When the shim exposes its Node entrypoint, run that entrypoint
+/// with Node instead of sending the prompt through `cmd.exe`.
+fn command_for_backend(bin: &std::path::Path) -> Command {
+    #[cfg(windows)]
+    if let Some(script) = npm_shim_node_script(bin) {
+        let bundled_node = bin
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("node.exe");
+        let mut cmd = if bundled_node.is_file() {
+            Command::new(bundled_node)
+        } else {
+            Command::new("node")
+        };
+        cmd.arg(script);
+        return cmd;
+    }
+
+    Command::new(bin)
+}
+
+#[cfg(windows)]
+fn npm_shim_node_script(bin: &std::path::Path) -> Option<PathBuf> {
+    let extension = bin.extension()?.to_string_lossy().to_ascii_lowercase();
+    if extension != "cmd" && extension != "bat" {
+        return None;
+    }
+    let contents = std::fs::read_to_string(bin).ok()?;
+    let marker = "node_modules\\";
+    let start = contents.find(marker)?;
+    let relative: String = contents[start..]
+        .chars()
+        .take_while(|ch| !ch.is_whitespace() && *ch != '"')
+        .collect();
+    if relative.is_empty() {
+        return None;
+    }
+    let script = bin
+        .parent()?
+        .join(relative.replace('\\', std::path::MAIN_SEPARATOR_STR));
+    script.is_file().then_some(script)
+}
+
+fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
     let mut child = cmd
         .spawn()
         .map_err(|e| LlmError::Backend(format!("spawn failed: {e}")))?;
