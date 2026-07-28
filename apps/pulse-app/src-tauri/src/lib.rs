@@ -56,7 +56,6 @@ struct SettingsSnapshot {
 struct ContextEnvelope {
     active_app: Option<String>,
     window_title: Option<String>,
-    selected_text: Option<String>,
     captured_at: String,
 }
 
@@ -64,7 +63,6 @@ struct ContextEnvelope {
 struct OmniboxPreview {
     parsed: ParsedOmniboxIntent,
     context: ContextEnvelope,
-    needs_context_confirmation: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -346,14 +344,7 @@ fn is_pulse_window(title: Option<&str>) -> bool {
     matches!(title, Some("Pulse") | Some("Pulse pet"))
 }
 
-fn capture_context_envelope(
-    include_selected_text: bool,
-    tracker: &ContextTracker,
-) -> ContextEnvelope {
-    // Clipboard access is only performed after an explicit UI action. In the MVP it
-    // represents selected text copied by the user; it is never persisted until the
-    // preview is confirmed.
-    let selected_text = include_selected_text.then(capture_clipboard_text).flatten();
+fn capture_context_envelope(tracker: &ContextTracker) -> ContextEnvelope {
     let (active_app, window_title) = active_window_metadata();
     let (active_app, window_title) = if is_pulse_window(window_title.as_deref()) {
         tracker
@@ -368,7 +359,6 @@ fn capture_context_envelope(
     ContextEnvelope {
         active_app,
         window_title,
-        selected_text,
         captured_at: chrono::Utc::now().to_rfc3339(),
     }
 }
@@ -411,44 +401,6 @@ fn start_active_window_tracker(tracker: Arc<Mutex<(Option<String>, Option<String
     });
 }
 
-#[cfg(windows)]
-fn capture_clipboard_text() -> Option<String> {
-    use windows_sys::Win32::System::DataExchange::{
-        CloseClipboard, GetClipboardData, OpenClipboard,
-    };
-    use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
-    unsafe {
-        if OpenClipboard(std::ptr::null_mut()) == 0 {
-            return None;
-        }
-        let handle = GetClipboardData(13); // CF_UNICODETEXT
-        if handle.is_null() {
-            CloseClipboard();
-            return None;
-        }
-        let ptr = GlobalLock(handle) as *const u16;
-        if ptr.is_null() {
-            CloseClipboard();
-            return None;
-        }
-        let mut len = 0usize;
-        while len < 32_768 && *ptr.add(len) != 0 {
-            len += 1;
-        }
-        let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len))
-            .trim()
-            .to_string();
-        GlobalUnlock(handle);
-        CloseClipboard();
-        (!text.is_empty()).then_some(text)
-    }
-}
-
-#[cfg(not(windows))]
-fn capture_clipboard_text() -> Option<String> {
-    None
-}
-
 fn find_task(store: &Store, selected_id: Option<&str>, subject: &str) -> Result<Task, String> {
     if let Some(id) = selected_id.filter(|id| !id.is_empty()) {
         return store.resolve_task(id).map_err(|e| e.to_string());
@@ -473,13 +425,11 @@ fn find_task(store: &Store, selected_id: Option<&str>, subject: &str) -> Result<
 #[tauri::command]
 fn preview_omnibox(
     input: String,
-    include_selected_text: bool,
     tracker: tauri::State<'_, ContextTracker>,
 ) -> OmniboxPreview {
-    let context = capture_context_envelope(include_selected_text, &tracker);
+    let context = capture_context_envelope(&tracker);
     OmniboxPreview {
         parsed: parse_omnibox(&input, chrono::Local::now()),
-        needs_context_confirmation: context.selected_text.is_some(),
         context,
     }
 }

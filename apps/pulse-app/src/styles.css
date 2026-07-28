@@ -1,3 +1,37 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "tw-animate-css";
+
+/* Tailwind utilities are enabled without its global preflight so the existing
+   desktop interface retains its current baseline styles during migration. */
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-card: var(--surface-low);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--surface-high);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--button-primary);
+  --color-primary-foreground: var(--button-primary-text);
+  --color-secondary: var(--surface-high);
+  --color-secondary-foreground: var(--text);
+  --color-muted: var(--surface);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--accent-container);
+  --color-accent-foreground: var(--accent);
+  --color-destructive: var(--danger-container);
+  --color-destructive-foreground: var(--danger);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--accent);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
 :root {
   color-scheme: dark;
   --bg: #060302;
@@ -265,17 +299,31 @@ button { -webkit-font-smoothing: antialiased; }
 .panel-body { margin: 0; padding: 22px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--text); font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 13px; line-height: 1.6; }
 .settings { padding: 20px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }.settings section { background: var(--surface-low); border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 16px; }.toggle { display: flex; align-items: center; gap: 10px; margin: 10px 0; cursor: pointer; }.toggle input { accent-color: var(--accent); }.muted { color: var(--muted); font-size: 13px; margin: 6px 0; }.muted code { color: var(--secondary); font-size: 12px; }
 
-.pet-shell { position: fixed; z-index: 20; right: 24px; bottom: 22px; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none; }
-.pet-window, .pet-window body, .pet-window #root { background: transparent; }.pet-app { width: 100%; min-height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-end; gap: 10px; padding: 0; overflow: hidden; }.pet-app.pet-expanded { padding: 0; }.pet-app .pet-row { display: flex; align-items: center; justify-content: flex-end; width: 100%; }.pet-app:not(.pet-expanded) .pet-row { justify-content: center; }.pet-app.pet-expanded > .omnibox, .pet-app.pet-expanded > .reminder-card, .pet-app.pet-expanded > .pet-results { width: calc(100% - 24px); margin-right: 12px; }.pet-app .pet { flex: 0 0 auto; overflow: hidden; cursor: pointer; }.pet-app .pet img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.pet-results, .omnibox, .reminder-card { border: 1px solid rgba(173, 207, 180, 0.35); border-radius: 14px; background: var(--surface); box-shadow: 0 16px 45px rgba(8, 6, 5, .52); }.pet-results { width: 100%; padding: 10px; }.pet-status { width: 100%; color: var(--danger); font-size: 11px; overflow-wrap: anywhere; }.pet-results button { width: 100%; overflow: hidden; margin-top: 5px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-high); color: var(--text); cursor: pointer; text-align: left; text-overflow: ellipsis; white-space: nowrap; }.pet-shell > * { pointer-events: auto; }.pet { width: 54px; height: 54px; padding: 0; border: 0; border-radius: 50%; background: radial-gradient(circle at 32% 28%, #c8ebd0, #466550 62%, #183624); box-shadow: 0 10px 30px rgba(24, 54, 36, 0.45); display: flex; justify-content: center; align-items: center; gap: 7px; overflow: hidden; cursor: pointer; }.pet img { display: block; width: 100%; height: 100%; object-fit: contain; }.pet-eye { width: 7px; height: 10px; border-radius: 50%; background: #101735; box-shadow: 0 0 0 2px rgba(255,255,255,.22); }.pet-due { animation: pet-pulse 1.2s ease-in-out infinite; }@keyframes pet-pulse { 50% { box-shadow: 0 0 0 10px rgba(240, 189, 139, .13), 0 10px 30px rgba(24, 54, 36, .45); } }.omnibox, .reminder-card { width: min(430px, calc(100vw - 42px)); padding: 14px; }.omnibox-title, .reminder-label { margin-bottom: 10px; color: var(--accent); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }.omnibox input { box-sizing: border-box; width: 100%; padding: 10px 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-lowest); color: var(--text); }.omnibox-hint { margin: 8px 0; color: var(--muted); font-size: 11px; }.capture-toggle { display: block; margin: 10px 0; color: var(--muted); font-size: 12px; }.omnibox-preview { margin: 10px 0; padding: 9px; border-radius: var(--radius); background: rgba(173, 207, 180, .11); color: var(--text); font-size: 12px; }.omnibox-preview p { margin: 6px 0 0; color: var(--muted); }.omnibox-actions, .reminder-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }.reminder-card strong { display: block; margin: 2px 0 11px; color: var(--text); }.reminder-actions button { font-size: 12px; padding: 6px 8px; }
-.pet-message { width: min(300px, calc(100vw - 42px)); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--muted-strong); font-size: 12px; box-shadow: 0 12px 32px rgba(8, 6, 5, .42); }
-
-/* Keep the pet's visible right edge fixed as its companion window expands. */
-.pet-app .pet-row,
-.pet-app:not(.pet-expanded) .pet-row {
-  justify-content: flex-end;
-  padding-right: 7px;
-}
+.pet-window, .pet-window body, .pet-window #root { background: transparent; }
+.pet-app { width: 100%; min-height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-end; gap: 10px; padding: 10px 7px 7px 0; overflow: hidden; }
+.pet-app .pet-row { display: flex; align-items: center; justify-content: flex-end; width: 100%; }
+.pet-app:not(.pet-expanded) .pet-row { justify-content: center; padding-right: 0; }
+.pet-app.pet-expanded > .pet-card, .pet-app.pet-expanded > .pet-message { width: calc(100% - 12px); margin-right: 5px; }
+.pet-card { gap: 0; overflow: hidden; border: 1px solid rgba(0, 0, 0, .38); background: linear-gradient(145deg, rgba(23, 16, 13, .98), rgba(10, 6, 5, .98)); }
+.pet-card-header { gap: 5px; padding: 14px 15px 10px; }
+.pet-card-content { padding: 0 15px 15px; }
+.pet-eyebrow { display: flex; align-items: center; gap: 5px; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+.pet-eyebrow svg { width: 12px; height: 12px; }
+.pet-card-title { color: var(--text); font-size: 15px; line-height: 1.3; letter-spacing: -.01em; }
+.pet-card-header [data-slot="card-description"] { font-size: 12px; line-height: 1.35; }
+.pet-app .pet { flex: 0 0 auto; width: 54px; height: 54px; padding: 0; border: 0; border-radius: 50%; background: radial-gradient(circle at 32% 28%, #c8ebd0, #466550 62%, #183624); box-shadow: 0 10px 30px rgba(24, 54, 36, .45); overflow: hidden; cursor: pointer; }
+.pet-app .pet:hover { background: radial-gradient(circle at 32% 28%, #def6e1, #54765e 62%, #183624); box-shadow: 0 12px 34px rgba(24, 54, 36, .62); }
+.pet-app .pet img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.pet-due { animation: pet-pulse 1.2s ease-in-out infinite; }
+@keyframes pet-pulse { 50% { box-shadow: 0 0 0 10px rgba(240, 189, 139, .13), 0 10px 30px rgba(24, 54, 36, .45); } }
+.omnibox-actions, .reminder-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+.omnibox-actions button svg, .reminder-actions button svg { width: 14px; height: 14px; }
+.reminder-actions { margin-top: 0; }
+.pet-results-list { display: flex; flex-direction: column; gap: 3px; }
+.pet-result { width: 100%; justify-content: space-between; overflow: hidden; padding: 7px 8px; color: var(--text); text-align: left; }
+.pet-result span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pet-result svg { flex: 0 0 auto; width: 15px; height: 15px; color: var(--accent); }
+.pet-message { padding: 9px 11px; border: 1px solid rgba(0, 0, 0, .38); border-radius: var(--radius); background: rgba(23, 16, 13, .96); color: var(--muted-strong); font-size: 12px; overflow-wrap: anywhere; }
 
 @media (max-width: 980px) { .app { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr) auto; }.detail { border-left: none; border-top: 1px solid var(--border-soft); max-height: 40vh; }.sidebar { padding: 12px 14px; gap: 10px; }.nav { flex-direction: row; flex-wrap: wrap; }.nav button { padding: 7px 9px; }.sidebar-footer { display: none; } }
 @media (max-width: 560px) { .window-context { display: none; }.window-control { width: 40px; }.toolbar { padding: 14px 16px; }.toolbar button { padding: 9px 10px; }.list { padding: 12px; } }

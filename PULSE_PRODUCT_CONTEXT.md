@@ -589,8 +589,6 @@ For applications without deep integration, Pulse should support graceful context
 - Active window title
 - Process/application name
 - Current URL when available
-- Selected text
-- Clipboard content with user action
 - File path or document title
 - Manual context paste
 - “Capture current activity” action
@@ -611,8 +609,6 @@ active_process
 window_title
 current_url
 current_document
-selected_text
-clipboard_text_if_authorized
 active_task
 active_agent_session
 recent_activity

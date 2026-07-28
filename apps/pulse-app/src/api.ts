@@ -4,14 +4,12 @@ import type { ActivityTimeline, Reminder, Task, TaskDetail, TaskStatus } from ".
 export interface ContextEnvelope {
   active_app: string | null;
   window_title: string | null;
-  selected_text: string | null;
   captured_at: string;
 }
 
 export interface OmniboxPreview {
   parsed: { intent: string; raw: string; subject: string; due_at: string | null };
   context: ContextEnvelope;
-  needs_context_confirmation: boolean;
 }
 
 export interface OmniboxResult {
@@ -21,8 +19,8 @@ export interface OmniboxResult {
   tasks: Task[];
 }
 
-export async function previewOmnibox(input: string, includeSelectedText: boolean): Promise<OmniboxPreview> {
-  return invoke("preview_omnibox", { input, includeSelectedText });
+export async function previewOmnibox(input: string): Promise<OmniboxPreview> {
+  return invoke("preview_omnibox", { input });
 }
 
 export async function executeOmnibox(input: string, selectedTaskId: string | null, context: ContextEnvelope): Promise<OmniboxResult> {

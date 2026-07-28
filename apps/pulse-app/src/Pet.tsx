@@ -1,4 +1,8 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { Check, ChevronRight, ExternalLink, LoaderCircle, Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
   dueReminders,
   executeOmnibox,
@@ -17,12 +21,12 @@ export default function Pet() {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [preview, setPreview] = useState<Awaited<ReturnType<typeof previewOmnibox>> | null>(null);
-  const [includeSelection, setIncludeSelection] = useState(false);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [resultTasks, setResultTasks] = useState<Task[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const surfaced = useRef(new Set<string>());
+  const isExpanded = open || reminders.length > 0 || resultTasks.length > 0 || Boolean(message);
 
   useEffect(() => {
     document.documentElement.classList.add("pet-window");
@@ -30,8 +34,8 @@ export default function Pet() {
   }, []);
 
   useEffect(() => {
-    void setPetExpanded(open || reminders.length > 0 || resultTasks.length > 0).catch((error) => setMessage(String(error)));
-  }, [open, reminders.length, resultTasks.length]);
+    void setPetExpanded(isExpanded).catch((error) => setMessage(String(error)));
+  }, [isExpanded]);
 
   useEffect(() => {
     const poll = () => void dueReminders().then((items) => {
@@ -54,13 +58,12 @@ export default function Pet() {
     if (!nextPreview) {
       if (!input.trim()) return;
       try {
-        nextPreview = await previewOmnibox(input, includeSelection);
+        nextPreview = await previewOmnibox(input);
         setPreview(nextPreview);
       } catch (error) {
         setMessage(String(error));
         return;
       }
-      if (nextPreview.needs_context_confirmation) return;
     }
     setBusy(true);
     try {
@@ -69,7 +72,6 @@ export default function Pet() {
       setResultTasks(result.tasks);
       setInput("");
       setPreview(null);
-      setIncludeSelection(false);
       if (!result.tasks.length) setOpen(false);
     } catch (error) {
       setMessage(String(error));
@@ -91,32 +93,60 @@ export default function Pet() {
     }
   }
 
+  function dismissPanel() {
+    setOpen(false);
+    setPreview(null);
+    setResultTasks([]);
+    setMessage("");
+  }
+
   return (
-    <main className={`pet-app ${open || reminders.length ? "pet-expanded" : ""}`} aria-live="polite">
+    <main className={`pet-app ${isExpanded ? "pet-expanded" : ""}`} aria-live="polite">
       {reminders.length ? (
-        <section className="reminder-card">
-          <div className="reminder-label">Reminder due</div>
-          <strong>{reminders[0].title}</strong>
-          <div className="reminder-actions">
-            <button onClick={() => void runReminder(reminders[0], "open_context")}>Open Context</button>
-            <button onClick={() => void runReminder(reminders[0], "snooze")}>Snooze</button>
-            <button className="primary" onClick={() => void runReminder(reminders[0], "done")}>Done</button>
-          </div>
-        </section>
+        <Card className="pet-card reminder-card">
+          <CardHeader className="pet-card-header">
+            <div className="pet-eyebrow"><Sparkles aria-hidden="true" /> Reminder due</div>
+            <CardTitle className="pet-card-title">{reminders[0].title}</CardTitle>
+          </CardHeader>
+          <CardContent className="pet-card-content reminder-actions">
+            <Button size="sm" variant="outline" onClick={() => void runReminder(reminders[0], "open_context")}>Open context</Button>
+            <Button size="sm" variant="ghost" onClick={() => void runReminder(reminders[0], "snooze")}>Snooze</Button>
+            <Button size="sm" onClick={() => void runReminder(reminders[0], "done")}><Check aria-hidden="true" />Done</Button>
+          </CardContent>
+        </Card>
       ) : null}
 
       {open ? (
-        <form className="omnibox" onSubmit={(event) => void submit(event)} aria-label="Pulse omnibox">
-          <div className="omnibox-title">What should Pulse remember?</div>
-          <input autoFocus value={input} onChange={(event) => { setInput(event.target.value); setPreview(null); }} onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }} placeholder="Add review billing PR" />
-         <div className="omnibox-actions"><button className="primary" type="submit" disabled={!input.trim() || busy}>Save</button><button type="button" onClick={() => void showMainWindow()}>Open full Pulse</button></div>
-        </form>
+        <Card className="pet-card omnibox">
+          <CardHeader className="pet-card-header">
+            <div>
+              <CardTitle className="pet-card-title">What should Pulse remember?</CardTitle>
+              <CardDescription>Capture the next step before it slips away.</CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent className="pet-card-content">
+            <form onSubmit={(event) => void submit(event)} aria-label="Pulse omnibox">
+              <Input autoFocus value={input} onChange={(event) => { setInput(event.target.value); setPreview(null); }} onKeyDown={(event) => { if (event.key === "Escape") dismissPanel(); }} placeholder="Review billing pull request" />
+              <div className="omnibox-actions">
+                <Button type="submit" disabled={!input.trim() || busy}>{busy ? <LoaderCircle className="pet-spinner" aria-hidden="true" /> : null}Save</Button>
+                <Button type="button" variant="outline" onClick={() => void showMainWindow()}><ExternalLink aria-hidden="true" />Open full Pulse</Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
       ) : null}
 
-      {resultTasks.length ? <section className="pet-results"><div className="reminder-label">Matches</div>{resultTasks.slice(0, 4).map((task) => <button key={task.id} onClick={() => void openTaskContext(task.id, "open_context")}>{task.title}</button>)}</section> : null}
-      {message ? <div className="pet-message">{message}</div> : null}
+      {resultTasks.length ? (
+        <Card className="pet-card pet-results">
+          <CardHeader className="pet-card-header"><div className="pet-eyebrow">Matches</div><CardTitle className="pet-card-title">Related tasks</CardTitle></CardHeader>
+          <CardContent className="pet-card-content pet-results-list">
+            {resultTasks.slice(0, 4).map((task) => <Button key={task.id} variant="ghost" className="pet-result" onClick={() => void openTaskContext(task.id, "open_context")}><span>{task.title}</span><ChevronRight aria-hidden="true" /></Button>)}
+          </CardContent>
+        </Card>
+      ) : null}
+      {message ? <div className="pet-message" role="status">{message}</div> : null}
       <div className="pet-row">
-        <button className={`pet ${reminders.length ? "pet-due" : ""}`} onClick={() => setOpen((value) => !value)} onContextMenu={(event) => { event.preventDefault(); void showPetContextMenu(); }} aria-label="Open Pulse task entry"><img src="/pulse-logo.png" alt="Pulse logo" /></button>
+        <Button className={`pet ${reminders.length ? "pet-due" : ""}`} variant="ghost" size="icon" onClick={() => setOpen((value) => !value)} onContextMenu={(event) => { event.preventDefault(); void showPetContextMenu(); }} aria-label="Open Pulse task entry"><img src="/pulse-logo.png" alt="Pulse logo" /></Button>
       </div>
     </main>
   );
