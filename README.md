@@ -1,103 +1,81 @@
 # Pulse
 
 <p align="center">
-  <img src="pulse-firefly-icon-pack/pulse-firefly-512.png" alt="Pulse firefly icon" width="180">
+  <img src="apps/pulse-app/public/pulse-logo.png" alt="Pulse firefly logo" width="144">
 </p>
 
-**Your work, always in context.**
+<p align="center"><strong>The activity layer for your work.</strong></p>
 
-Pulse is a Windows desktop app that keeps human-and-AI work connected. It turns
-your tasks, agent sessions, decisions, reminders, evidence, and handoffs into
-one local activity record, so you can resume work without reconstructing the
+Pulse is a local-first Windows app that turns activity across your tools into a
+clear view of what is in progress, what needs attention, and what to do next.
+It keeps tasks, supported AI sessions, reminders, evidence, and handoffs in
+one private workspace, so returning to work does not mean reconstructing the
 context by hand.
 
-[Download the latest Windows installer](https://github.com/anirudh-makuluri/pulse/releases/latest/download/Pulse-Setup-x64.exe) · [View all releases](https://github.com/anirudh-makuluri/pulse/releases/latest) · [Read the roadmap](docs/implementation-roadmap.md)
+[Download Pulse for Windows](https://github.com/anirudh-makuluri/pulse/releases/latest/download/Pulse-Setup-x64.exe) | [View releases](https://github.com/anirudh-makuluri/pulse/releases/latest) | [Read the roadmap](docs/implementation-roadmap.md)
 
-> **Early release:** Pulse is Windows-only and actively being developed. Your
-> data stays on your machine by default.
+> **Early release:** Pulse is currently for Windows and under active
+> development. Your work data stays on your machine by default.
+
+## What Pulse does
+
+- Gives you a lightweight flow from **Inbox** to **Today**, **Next**,
+  **Waiting**, and **Done**.
+- Captures tasks quickly and keeps the next action visible alongside the task.
+- Brings user-enabled Claude and Codex session activity into the same work
+  view, with the supporting evidence retained locally.
+- Shows the work to focus on now, items that need triage, and unfinished work
+  you can continue.
+- Records a chronological activity timeline for tasks, sessions, reminders,
+  checkpoints, evidence, memories, and artifacts.
+- Supports local reminders, daily summaries, exports, settings, and a desktop
+  companion for quick access.
+
+## Local-first and private by default
+
+Pulse is designed to stay useful without handing your work history to a
+service.
+
+- Its SQLite database, configuration, logs, and exports live under
+  `%LOCALAPPDATA%\Pulse\`.
+- Claude and Codex sources remain off until you enable them.
+- Pulse does not store model-provider API keys. It can use a supported agent
+  CLI already installed on your `PATH` when you explicitly allow it.
+- Remote CLI-backed summaries require a privacy acknowledgement; otherwise
+  Pulse uses local heuristics.
+- Cloud sync is not required for tasks, reminders, sources, or the desktop
+  experience.
 
 ## Install on Windows
 
 1. [Download the latest Pulse installer](https://github.com/anirudh-makuluri/pulse/releases/latest/download/Pulse-Setup-x64.exe).
 2. Run `Pulse-Setup-x64.exe`.
-3. Open **Pulse** from the Start menu. The app starts its bundled local service
-   automatically.
+3. Open **Pulse** from the Start menu. Its local service starts automatically.
 
 Pulse does not require Rust, Node.js, or an agent API key to install or use.
-It stores its local data in `%LOCALAPPDATA%\Pulse\`.
 
 If Windows shows a reputation warning, review the publisher and release page
 before choosing whether to continue. Releases are not yet code-signed.
-
-## What Pulse does today
-
-- Keeps work in a lightweight **Inbox → Today / Next / Waiting → Done** flow.
-- Lets you add, search, update, complete, and inspect tasks from the desktop
-  app or CLI.
-- Records a chronological activity timeline with linked sessions, events,
-  checkpoints, evidence, reminders, memories, and artifacts.
-- Watches user-enabled Claude and Codex session sources to infer task
-  candidates, always retaining their evidence.
-- Generates daily summaries with an installed `grok`, `claude`, or `codex` CLI
-  when explicitly allowed, or uses local heuristics when it is not.
-- Supports local reminders, exports, settings, and Windows logon autostart for
-  the background service.
-
-## Local-first and private by default
-
-Pulse is designed to be useful offline.
-
-- Its SQLite database, configuration, logs, and exports live under
-  `%LOCALAPPDATA%\Pulse\`.
-- Claude and Codex source watching is off until you enable it.
-- Pulse never stores model-provider API keys. It can use an agent CLI already
-  installed on your `PATH`.
-- Remote CLI-backed inference requires an explicit privacy acknowledgement;
-  otherwise Pulse uses local heuristics.
-- Cloud sync is an opt-in feature. It is not required
-  for local tasks, reminders, or the desktop app.
-
-## Product direction
-
-The local activity timeline, pet omnibox, and reminder experience are complete.
-Pulse now supports quick task actions, a preview before selected text is saved,
-local reminder notifications, and clear handoffs back into an agent. The next
-milestone is **opt-in CockroachDB memory**: the CockroachDB schema, vector
-index, local MiniLM embeddings, durable local outbox, and Terraform-managed
-AWS sync API are ready. Later work adds structured continuity between agents.
-
-| Area | Status |
-|---|---|
-| Local activity timeline and desktop task detail | Complete |
-| SQLite, CLI, background service, and named-pipe IPC | Complete |
-| Claude/Codex sources and agent-CLI summaries | Complete |
-| Pet omnibox and reminder experience | Complete |
-| Opt-in cloud memory and sync | Complete |
-| Cross-agent handoff packages | Planned |
-
-See the [implementation roadmap](docs/implementation-roadmap.md) for the full
-workstream and acceptance criteria. Developers preparing the next cloud-memory
-milestone can follow the [CockroachDB memory setup](docs/cloud-memory-setup.md).
-The Terraform deployment guide is in [infra/aws](infra/aws/README.md).
 
 ## How it fits together
 
 ```text
 Claude / Codex sessions       Pulse desktop app / CLI
-          │                             │
-          └──── work signals ─────┬─────┘
-                                  ▼
+          |                             |
+          +--------- work signals ------+
+                                        |
+                                        v
                     pulse-service (local background service)
-                                  │
-             inference, reminders, JSON-RPC, and activity capture
-                                  │
-                                  ▼
+                                        |
+             activity capture, reminders, summaries, and JSON-RPC
+                                        |
+                                        v
                     SQLite at %LOCALAPPDATA%\Pulse\pulse.db
 ```
 
-The app bundles the service and CLI components needed for the desktop
-experience. If the service is unavailable, the app can still read and update
-the local database directly.
+The desktop app bundles the local service and CLI pieces it needs. If the
+service is unavailable, the app can still read and update the local database
+directly.
 
 ## For developers
 
@@ -107,12 +85,20 @@ the local database directly.
 - Node.js and npm
 - Windows for the current desktop build
 
-### Run from source
+### Run the desktop app
 
 ```powershell
 cd apps/pulse-app
 npm install
 npm run tauri dev
+```
+
+### Run the landing page
+
+```powershell
+cd apps/pulse-web
+npm install
+npm run dev
 ```
 
 ### Test and build
@@ -131,9 +117,6 @@ The installer is written to:
 ```text
 target\release\bundle\nsis\Pulse_<version>_x64-setup.exe
 ```
-
-Every push to `main` runs the Windows build and publishes the installer as a
-new GitHub Release.
 
 ### CLI
 
@@ -154,12 +137,13 @@ Useful commands include `pulse tasks`, `pulse sources`, `pulse summary`,
 
 ```text
 apps/pulse-app/       Tauri desktop app
-crates/pulse-core/    Domain models, SQLite, configuration, IPC client
+apps/pulse-web/       Pulse landing page
+crates/pulse-core/    Domain models, SQLite, configuration, and IPC client
 crates/pulse-cli/     Command-line interface
 crates/pulse-service/ Local background daemon, reminders, and IPC server
 crates/pulse-sources/ Claude and Codex session adapters
-crates/pulse-llm/     Agent-CLI discovery and heuristic fallback
-docs/                 Technical design and implementation roadmap
+crates/pulse-llm/     Agent CLI discovery and heuristic fallback
+docs/                 Product and technical documentation
 ```
 
 ## License
