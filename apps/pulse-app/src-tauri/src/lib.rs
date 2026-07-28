@@ -204,8 +204,7 @@ fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
     main.set_focus().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn show_pet_context_menu(app: tauri::AppHandle) -> Result<(), String> {
+fn show_pulse_context_menu(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::POINT;
@@ -215,17 +214,22 @@ fn show_pet_context_menu(app: tauri::AppHandle) -> Result<(), String> {
         };
 
         const OPEN_MAIN_ID: usize = 1;
-        let pet = app
+        const CLOSE_ID: usize = 2;
+        let window = app
             .get_webview_window("pet")
-            .ok_or_else(|| "Pulse pet window unavailable".to_string())?;
-        let hwnd = pet.hwnd().map_err(|e| e.to_string())?.0 as *mut std::ffi::c_void;
-        let label: Vec<u16> = "Open full Pulse\0".encode_utf16().collect();
+            .or_else(|| app.get_webview_window("main"))
+            .ok_or_else(|| "Pulse window unavailable".to_string())?;
+        let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as *mut std::ffi::c_void;
+        let open_label: Vec<u16> = "Open full Pulse\0".encode_utf16().collect();
+        let close_label: Vec<u16> = "Close Pulse\0".encode_utf16().collect();
         unsafe {
             let menu = CreatePopupMenu();
             if menu.is_null() {
                 return Err("could not create the Pulse menu".into());
             }
-            if AppendMenuW(menu, MF_STRING, OPEN_MAIN_ID, label.as_ptr()) == 0 {
+            if AppendMenuW(menu, MF_STRING, OPEN_MAIN_ID, open_label.as_ptr()) == 0
+                || AppendMenuW(menu, MF_STRING, CLOSE_ID, close_label.as_ptr()) == 0
+            {
                 DestroyMenu(menu);
                 return Err("could not add the Pulse menu item".into());
             }
@@ -248,6 +252,8 @@ fn show_pet_context_menu(app: tauri::AppHandle) -> Result<(), String> {
             DestroyMenu(menu);
             if selected as usize == OPEN_MAIN_ID {
                 return show_main_window(app);
+            } else if selected as usize == CLOSE_ID {
+                app.exit(0);
             }
         }
         Ok(())
@@ -257,6 +263,11 @@ fn show_pet_context_menu(app: tauri::AppHandle) -> Result<(), String> {
         let _ = app;
         Err("native Pulse menus are currently available on Windows only".into())
     }
+}
+
+#[tauri::command]
+fn show_pet_context_menu(app: tauri::AppHandle) -> Result<(), String> {
+    show_pulse_context_menu(app)
 }
 
 #[tauri::command]
@@ -954,6 +965,9 @@ pub fn run() {
         .manage(ManagedService::default())
         .manage(ContextTracker::default())
         .manage(PetVisibility::default())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = show_main_window(app.clone());
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
@@ -984,18 +998,26 @@ pub fn run() {
             Ok(())
         })
         .on_tray_icon_event(|app, event| {
-            if matches!(
-                event,
+            match event {
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
                     ..
-                } | TrayIconEvent::DoubleClick {
+                }
+                | TrayIconEvent::DoubleClick {
                     button: MouseButton::Left,
                     ..
+                } => {
+                    let _ = show_main_window(app.clone());
                 }
-            ) {
-                let _ = show_main_window(app.clone());
+                TrayIconEvent::Click {
+                    button: MouseButton::Right,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } => {
+                    let _ = show_pulse_context_menu(app.clone());
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![

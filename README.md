@@ -1,7 +1,7 @@
 # Pulse
 
 <p align="center">
-  <img src="apps/pulse-app/public/pulse-logo.png" alt="Pulse firefly logo" width="144">
+  <img src="logo.png" alt="Pulse firefly logo" width="144">
 </p>
 
 <p align="center"><strong>The activity layer for your work.</strong></p>
