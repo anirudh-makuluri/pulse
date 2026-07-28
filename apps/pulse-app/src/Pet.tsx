@@ -38,18 +38,36 @@ export default function Pet() {
   }, [isExpanded]);
 
   useEffect(() => {
-    const poll = () => void dueReminders().then((items) => {
-      const active = new Set(items.map((item) => `${item.id}:${item.due_at}`));
-      surfaced.current.forEach((key) => { if (!active.has(key)) surfaced.current.delete(key); });
-      const next = items.find((item) => !surfaced.current.has(`${item.id}:${item.due_at}`));
-      if (next) {
-        surfaced.current.add(`${next.id}:${next.due_at}`);
+    let disposed = false;
+    let checking = false;
+    const poll = async () => {
+      // A session sync can temporarily hold SQLite's write lock. Reminder
+      // polling is best-effort, so never turn that transient condition into a
+      // visible pet panel (which also resizes the companion window).
+      if (checking) return;
+      checking = true;
+      try {
+        const items = await dueReminders();
+        if (disposed) return;
+        const active = new Set(items.map((item) => `${item.id}:${item.due_at}`));
+        surfaced.current.forEach((key) => { if (!active.has(key)) surfaced.current.delete(key); });
+        const next = items.find((item) => !surfaced.current.has(`${item.id}:${item.due_at}`));
+        if (next) {
+          surfaced.current.add(`${next.id}:${next.due_at}`);
+        }
+        setReminders(items);
+      } catch {
+        // Keep the pet in its current state and retry on the next interval.
+      } finally {
+        checking = false;
       }
-      setReminders(items);
-    }).catch((error) => setMessage(`Reminder check failed: ${String(error)}`));
-    poll();
+    };
+    void poll();
     const id = window.setInterval(poll, 10_000);
-    return () => window.clearInterval(id);
+    return () => {
+      disposed = true;
+      window.clearInterval(id);
+    };
   }, []);
 
   async function submit(event: FormEvent) {

@@ -8,11 +8,11 @@ use pulse_llm::llm_status;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex},
     thread,
     time::Duration,
 };
-use tauri::{Emitter, Manager, PhysicalPosition};
+use tauri::{tray::{MouseButton, MouseButtonState, TrayIconEvent}, Emitter, Manager, PhysicalPosition};
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
 #[derive(Default)]
@@ -20,6 +20,9 @@ struct ManagedService(Mutex<Option<CommandChild>>);
 
 #[derive(Default)]
 struct ContextTracker(Arc<Mutex<(Option<String>, Option<String>)>>);
+
+#[derive(Default)]
+struct PetVisibility(AtomicBool);
 
 #[derive(Debug, Serialize)]
 struct TaskDetail {
@@ -50,6 +53,7 @@ struct SettingsSnapshot {
     service_line: String,
     config_path: String,
     data_dir: String,
+    show_pet: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -145,10 +149,18 @@ fn pin_pet_to_bottom_right<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-fn set_pet_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), String> {
+fn set_pet_expanded(
+    app: tauri::AppHandle,
+    pet_visibility: tauri::State<'_, PetVisibility>,
+    expanded: bool,
+) -> Result<(), String> {
     let pet = app
         .get_webview_window("pet")
         .ok_or_else(|| "Pulse pet window unavailable".to_string())?;
+    if !pet_visibility.0.load(Ordering::SeqCst) {
+        pet.hide().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
     // Resizing a transparent, always-on-top window while it is visible briefly
     // exposes its old top-left position on Windows. Hide it for the resize and
     // bottom-right pinning step, then restore it in its stable location.
@@ -165,6 +177,9 @@ fn set_pet_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), String>
     };
     let result = resize_result.and_then(|_| pin_pet_to_bottom_right(&pet));
     if was_visible {
+        // Windows can restore a hidden frameless window to the taskbar. Apply
+        // the companion style again before it becomes visible.
+        pet.set_skip_taskbar(true).map_err(|e| e.to_string())?;
         pet.show().map_err(|e| e.to_string())?;
     }
     result
@@ -789,7 +804,35 @@ fn get_settings() -> Result<SettingsSnapshot, String> {
         service_line,
         config_path: paths.config_path().display().to_string(),
         data_dir: paths.root.display().to_string(),
+        show_pet: cfg.desktop.show_pet,
     })
+}
+
+#[tauri::command]
+fn set_pet_visible(
+    app: tauri::AppHandle,
+    pet_visibility: tauri::State<'_, PetVisibility>,
+    visible: bool,
+) -> Result<(), String> {
+    let paths = paths()?;
+    let mut cfg = load_config(&paths.config_path()).map_err(|e| e.to_string())?;
+    cfg.desktop.show_pet = visible;
+    write_config(&paths.config_path(), &cfg).map_err(|e| e.to_string())?;
+    pet_visibility.0.store(visible, Ordering::SeqCst);
+
+    let pet = app
+        .get_webview_window("pet")
+        .ok_or_else(|| "Pulse pet window unavailable".to_string())?;
+    if !visible {
+        return pet.hide().map_err(|e| e.to_string());
+    }
+
+    pet.hide().map_err(|e| e.to_string())?;
+    pet.set_size(tauri::LogicalSize::new(68.0, 68.0))
+        .map_err(|e| e.to_string())?;
+    pin_pet_to_bottom_right(&pet)?;
+    pet.set_skip_taskbar(true).map_err(|e| e.to_string())?;
+    pet.show().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -910,6 +953,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ManagedService::default())
         .manage(ContextTracker::default())
+        .manage(PetVisibility::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
@@ -919,13 +963,40 @@ pub fn run() {
                 eprintln!("Pulse service did not auto-start: {error}");
             }
             if let Some(pet) = app.get_webview_window("pet") {
+                if let Err(error) = pet.set_skip_taskbar(true) {
+                    eprintln!("Pulse pet could not be hidden from the taskbar: {error}");
+                }
                 if let Err(error) = pin_pet_to_bottom_right(&pet) {
                     eprintln!("Pulse pet could not be positioned: {error}");
+                }
+                let show_pet = load_config(&paths()?.config_path())
+                    .map(|cfg| cfg.desktop.show_pet)
+                    .unwrap_or(true);
+                app.state::<PetVisibility>().0.store(show_pet, Ordering::SeqCst);
+                if show_pet {
+                    if let Err(error) = pet.show() {
+                        eprintln!("Pulse pet could not be shown: {error}");
+                    }
                 }
             }
             start_desktop_reminder_actions(app.handle().clone());
             start_active_window_tracker(app.state::<ContextTracker>().0.clone());
             Ok(())
+        })
+        .on_tray_icon_event(|app, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) {
+                let _ = show_main_window(app.clone());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             list_tasks,
@@ -937,6 +1008,7 @@ pub fn run() {
             delete_task,
             service_info,
             get_settings,
+            set_pet_visible,
             set_source_enabled,
             privacy_acknowledge,
             get_summary,

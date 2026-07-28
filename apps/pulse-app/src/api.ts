@@ -97,6 +97,7 @@ export interface SettingsSnapshot {
   service_line: string;
   config_path: string;
   data_dir: string;
+  show_pet: boolean;
 }
 
 export async function getSettings(): Promise<SettingsSnapshot> {
@@ -105,6 +106,10 @@ export async function getSettings(): Promise<SettingsSnapshot> {
 
 export async function setSourceEnabled(id: string, enabled: boolean): Promise<void> {
   return invoke("set_source_enabled", { id, enabled });
+}
+
+export async function setPetVisible(visible: boolean): Promise<void> {
+  return invoke("set_pet_visible", { visible });
 }
 
 export async function privacyAcknowledge(): Promise<void> {

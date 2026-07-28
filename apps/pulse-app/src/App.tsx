@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { Database, House, Inbox as InboxIcon, Settings as SettingsIcon } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import {
   createTask,
   deleteTask,
@@ -15,6 +16,7 @@ import {
   dueReminders,
   privacyAcknowledge,
   serviceInfo,
+  setPetVisible,
   setSourceEnabled,
   setTaskStatus,
   syncRecentSessions,
@@ -402,6 +404,9 @@ export default function App() {
 
   return (
     <div className="dashboard-shell">
+      <div className="sr-only" role="status" aria-live="polite">
+        {loading ? "Refreshing Pulse data." : info}
+      </div>
       <header
         className="window-bar"
         data-tauri-drag-region
@@ -479,10 +484,6 @@ export default function App() {
           <button className="session-sync" type="button" onClick={() => void syncSessions()} disabled={syncingSessions}>
             {syncingSessions ? "Syncing sessions..." : "Sync latest sessions"}
           </button>
-          <div className="meta">
-            {/* <div>{loading ? "Refreshing…" : "Live"}</div> */}
-            {/* <div>{info}</div> */}
-          </div>
         </div>
         </aside>
 
@@ -748,6 +749,22 @@ export default function App() {
                       Wrote: <code>{exportPath}</code>
                     </p>
                   ) : null}
+                </section>
+
+                <section className="home-card settings-card desktop-pet-setting">
+                  <div className="desktop-pet-copy">
+                    <h3>Desktop companion</h3>
+                    <p className="muted">Keep the Pulse pet at the bottom-right of your screen. Pulse remains available from the system tray when it is hidden.</p>
+                  </div>
+                  <Switch
+                    checked={settings.show_pet}
+                    onCheckedChange={(visible) =>
+                      void setPetVisible(visible)
+                        .then(refreshSettings)
+                        .catch((err) => setError(String(err)))
+                    }
+                    aria-label="Show desktop pet"
+                  />
                 </section>
 
                 <section className="home-card settings-card">

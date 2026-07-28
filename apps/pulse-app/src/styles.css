@@ -68,6 +68,8 @@
 
 * { box-sizing: border-box; }
 
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
 html, body, #root { margin: 0; height: 100%; overflow: hidden; }
 
 button, input { font: inherit; }
@@ -323,6 +325,9 @@ button { -webkit-font-smoothing: antialiased; }
 .section-list { flex: 1; min-height: 0; padding: 0; gap: 12px; }
 .settings { display: flex; flex-direction: column; gap: 18px; }
 .settings-card { min-height: 0; }
+.desktop-pet-setting { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.desktop-pet-copy { min-width: 0; }
+.desktop-pet-copy .muted { margin-bottom: 0; }
 .toggle { display: flex; align-items: center; gap: 10px; margin: 10px 0; cursor: pointer; }.toggle input { accent-color: var(--accent); }.muted { color: var(--muted); font-size: 13px; margin: 6px 0; }.muted code { color: var(--secondary); font-size: 12px; }
 
 .panel-page > .home-page { height: 100%; overflow: auto; padding: 34px 36px 42px; }
@@ -358,7 +363,7 @@ button { -webkit-font-smoothing: antialiased; }
 .source-card > div { max-width: 590px; }
 .source-toggle { flex: 0 0 auto; margin: 0; color: var(--accent); font-size: 12px; font-weight: 700; }
 
-.pet-window, .pet-window body, .pet-window #root { background: transparent; }
+.pet-window, .pet-window body, .pet-window #root { width: 100%; overflow: hidden; background: transparent; }
 .pet-app { width: 100%; min-height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-end; gap: 10px; padding: 10px 7px 7px 0; overflow: hidden; }
 .pet-app .pet-row { display: flex; align-items: center; justify-content: flex-end; width: 100%; }
 .pet-app:not(.pet-expanded) .pet-row { justify-content: center; padding-right: 0; }

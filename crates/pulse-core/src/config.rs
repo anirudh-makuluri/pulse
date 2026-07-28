@@ -21,6 +21,8 @@ pub struct Config {
     pub embeddings: EmbeddingsConfig,
     #[serde(default)]
     pub privacy: PrivacyConfig,
+    #[serde(default)]
+    pub desktop: DesktopConfig,
 }
 
 impl Default for Config {
@@ -33,6 +35,25 @@ impl Default for Config {
             sync: SyncConfig::default(),
             embeddings: EmbeddingsConfig::default(),
             privacy: PrivacyConfig::default(),
+            desktop: DesktopConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DesktopConfig {
+    #[serde(default = "default_show_pet")]
+    pub show_pet: bool,
+}
+
+fn default_show_pet() -> bool {
+    true
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            show_pet: default_show_pet(),
         }
     }
 }

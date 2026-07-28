@@ -71,6 +71,7 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
         paths: paths.clone(),
         store: Arc::clone(&store),
         config: Arc::clone(&config),
+        session_sync_active: AtomicBool::new(false),
         shutdown: Arc::new(AtomicBool::new(false)),
         started_at: Utc::now(),
         pid: current_pid(),
@@ -182,6 +183,7 @@ struct ServiceState {
     paths: PulsePaths,
     store: Arc<Mutex<Store>>,
     config: Arc<Mutex<Config>>,
+    session_sync_active: AtomicBool,
     shutdown: Arc<AtomicBool>,
     started_at: chrono::DateTime<Utc>,
     pid: u32,
@@ -189,6 +191,15 @@ struct ServiceState {
 
 impl RpcHandler for ServiceState {
     fn handle(&self, method: &str, params: Value) -> Result<Value, RpcErrorObject> {
+        // Session analysis can take minutes while the configured CLI runs. Do
+        // not let normal UI requests wait behind its database lock: callers
+        // get a quick, retryable response instead of appearing hung.
+        if method != "inference.sync_recent" && self.session_sync_active.load(Ordering::SeqCst) {
+            return Err(RpcErrorObject::new(
+                RpcCode::ServiceBusy,
+                "Session sync is in progress; please try again shortly.",
+            ));
+        }
         match method {
             "ping" => Ok(json!({
                 "ok": true,
@@ -277,6 +288,19 @@ impl RpcHandler for ServiceState {
                 Ok(json!({ "ok": true, "id": id, "enabled": enabled }))
             }
             "inference.sync_recent" => {
+                if self.session_sync_active.swap(true, Ordering::SeqCst) {
+                    return Err(RpcErrorObject::new(
+                        RpcCode::ServiceBusy,
+                        "A session sync is already in progress.",
+                    ));
+                }
+                struct ResetSessionSync<'a>(&'a AtomicBool);
+                impl Drop for ResetSessionSync<'_> {
+                    fn drop(&mut self) {
+                        self.0.store(false, Ordering::SeqCst);
+                    }
+                }
+                let _reset_session_sync = ResetSessionSync(&self.session_sync_active);
                 let cfg = self
                     .config
                     .lock()

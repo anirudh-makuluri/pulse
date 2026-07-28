@@ -33,11 +33,16 @@
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
+        "visible": false,
         "shadow": false
       }
     ],
     "security": {
       "csp": null
+    },
+    "trayIcon": {
+      "iconPath": "icons/pulse-logo.ico",
+      "tooltip": "Pulse"
     }
   },
   "bundle": {
