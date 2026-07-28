@@ -1,11 +1,16 @@
 import type { CSSProperties } from "react";
 import { Database, House, Inbox, Minus, Settings, Square, X } from "lucide-react";
 import Link from "next/link";
-
-const DOWNLOAD_URL =
-  "https://github.com/anirudh-makuluri/pulse/releases/latest/download/Pulse-Setup-x64.exe";
-const REPOSITORY_URL = "https://github.com/anirudh-makuluri/pulse";
-const RELEASES_URL = `${REPOSITORY_URL}/releases/latest`;
+import { headers } from "next/headers";
+import {
+  downloadUrl,
+  getConfiguredSiteUrl,
+  getSiteUrlFromHost,
+  releasesUrl,
+  repositoryUrl,
+  siteDescription,
+  siteName,
+} from "./seo";
 
 const fireflies = [
   { x: "6%", y: "25%", size: "3px", duration: "15s", delay: "-4s", dx: "44px", dy: "-22px" },
@@ -47,9 +52,54 @@ type FireflyStyle = CSSProperties & {
   "--dy": string;
 };
 
-export default function Home() {
+export default async function Home() {
+  const requestHeaders = await headers();
+  const host =
+    requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
+  const protocol = requestHeaders.get("x-forwarded-proto");
+  const siteUrl =
+    getConfiguredSiteUrl() ??
+    (host ? getSiteUrlFromHost(host, protocol) : "http://localhost:3000");
+  const structuredData = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": `${siteUrl}/#website`,
+        name: siteName,
+        url: siteUrl,
+        description: siteDescription,
+        inLanguage: "en-US",
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": `${siteUrl}/#software`,
+        name: siteName,
+        applicationCategory: "ProductivityApplication",
+        operatingSystem: "Windows",
+        description: siteDescription,
+        url: siteUrl,
+        downloadUrl,
+        softwareHelp: repositoryUrl,
+        sameAs: [repositoryUrl, releasesUrl],
+        image: `${siteUrl}/og.png`,
+      },
+      {
+        "@type": "Organization",
+        "@id": `${siteUrl}/#organization`,
+        name: siteName,
+        url: siteUrl,
+        logo: `${siteUrl}/pulse-logo.png`,
+      },
+    ],
+  };
+
   return (
     <main className="landing">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+      />
       <div className="forest" aria-hidden="true" />
       <div className="atmosphere" aria-hidden="true" />
       <div className="fireflies" aria-hidden="true">
@@ -117,7 +167,7 @@ export default function Home() {
           </p>
 
           <div className="hero-actions">
-            <a className="download-button" href={DOWNLOAD_URL}>
+            <a className="download-button" href={downloadUrl}>
               <span className="windows-mark" aria-hidden="true">
                 <i />
                 <i />
@@ -238,9 +288,9 @@ export default function Home() {
           </div>
 
           <nav className="footer-links" aria-label="Footer">
-            <a href={REPOSITORY_URL}>GitHub</a>
-            <a href={RELEASES_URL}>Releases</a>
-            <a href={DOWNLOAD_URL}>Download</a>
+            <a href={repositoryUrl}>GitHub</a>
+            <a href={releasesUrl}>Releases</a>
+            <a href={downloadUrl}>Download</a>
           </nav>
 
           <p className="footer-meta">&copy; 2026 Pulse. Built for work in motion.</p>
