@@ -580,6 +580,14 @@ h1 span {
   overflow: hidden;
 }
 
+.hero-fireflies {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .firefly {
   position: absolute;
   top: var(--y);

@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { Database, House, Inbox, Minus, Settings, Square, X } from "lucide-react";
+import Link from "next/link";
 
 const DOWNLOAD_URL =
   "https://github.com/anirudh-makuluri/pulse/releases/latest/download/Pulse-Setup-x64.exe";
@@ -20,6 +21,20 @@ const fireflies = [
   { x: "82%", y: "45%", size: "3px", duration: "14s", delay: "-9s", dx: "34px", dy: "-35px" },
   { x: "91%", y: "66%", size: "2px", duration: "12s", delay: "-3s", dx: "-30px", dy: "24px" },
   { x: "96%", y: "31%", size: "4px", duration: "20s", delay: "-16s", dx: "-42px", dy: "31px" },
+] as const;
+
+const heroFireflies = [
+  { x: "8%", y: "16%", size: "2px", duration: "18s", delay: "-10s", dx: "32px", dy: "28px" },
+  { x: "14%", y: "39%", size: "2px", duration: "17s", delay: "-5s", dx: "26px", dy: "-34px" },
+  { x: "24%", y: "28%", size: "2px", duration: "20s", delay: "-16s", dx: "-35px", dy: "24px" },
+  { x: "32%", y: "43%", size: "3px", duration: "15s", delay: "-12s", dx: "30px", dy: "-27px" },
+  { x: "42%", y: "20%", size: "2px", duration: "16s", delay: "-3s", dx: "-24px", dy: "31px" },
+  { x: "55%", y: "44%", size: "2px", duration: "19s", delay: "-15s", dx: "34px", dy: "22px" },
+  { x: "62%", y: "27%", size: "3px", duration: "14s", delay: "-7s", dx: "-28px", dy: "-24px" },
+  { x: "72%", y: "36%", size: "2px", duration: "21s", delay: "-18s", dx: "38px", dy: "-18px" },
+  { x: "80%", y: "22%", size: "2px", duration: "17s", delay: "-9s", dx: "-33px", dy: "30px" },
+  { x: "87%", y: "34%", size: "2px", duration: "16s", delay: "-1s", dx: "24px", dy: "36px" },
+  { x: "93%", y: "44%", size: "3px", duration: "19s", delay: "-14s", dx: "-36px", dy: "-20px" },
 ] as const;
 
 type FireflyStyle = CSSProperties & {
@@ -58,7 +73,7 @@ export default function Home() {
       </div>
 
       <header className="site-header">
-        <a className="brand" href="/" aria-label="Pulse home">
+        <Link className="brand" href="/" aria-label="Pulse home">
           <img
             src="/pulse-logo.png"
             alt=""
@@ -66,10 +81,30 @@ export default function Home() {
             height={40}
           />
           <span>Pulse</span>
-        </a>
+        </Link>
       </header>
 
       <section className="hero" aria-labelledby="hero-title">
+        <div className="hero-fireflies" aria-hidden="true">
+          {heroFireflies.map((firefly, index) => (
+            <span
+              className="firefly"
+              key={index}
+              style={
+                {
+                  "--x": firefly.x,
+                  "--y": firefly.y,
+                  "--size": firefly.size,
+                  "--duration": firefly.duration,
+                  "--delay": firefly.delay,
+                  "--dx": firefly.dx,
+                  "--dy": firefly.dy,
+                } as FireflyStyle
+              }
+            />
+          ))}
+        </div>
+
         <div className="hero-copy">
           <p className="eyebrow">Your work, kept in view</p>
           <h1 id="hero-title">
