@@ -488,11 +488,11 @@ export default function App() {
 
         <main className="main">
         {isTaskView ? (
-          <>
-            <div className="inbox-header">
+          <div className="panel-page section-page inbox-page">
+            <div className="section-header">
               <div>
-                <div className="eyebrow">Tasks</div>
-                <h1>Inbox</h1>
+                <div className="eyebrow">Inbox</div>
+                <p>Review and organize captured tasks.</p>
               </div>
               <div className="task-filters" aria-label="Task filters">
                 {TASK_FILTERS.map((filter) => (
@@ -513,7 +513,7 @@ export default function App() {
             </div>
             {error ? <div className="error">{error}</div> : null}
 
-            <div className="list">
+            <div className="list section-list">
               {tasks.length === 0 ? (
                 <div className="empty-list">No tasks in {taskFilter}.</div>
               ) : (
@@ -527,16 +527,15 @@ export default function App() {
                 ))
               )}
             </div>
-          </>
+          </div>
         ) : null}
 
         {view === "Home" ? (
-          <div className="panel-page home-panel px-10 py-5">
+          <div className="panel-page section-page home-panel">
             <div className="home-header">
               <div>
-                <div className="eyebrow">Dashboard</div>
-                <h1>What needs your attention?</h1>
-                <p>Pick up where you left off, review new work, or see today at a glance.</p>
+                <div className="eyebrow">Home</div>
+                <p>Stay on top of what needs your attention.</p>
               </div>
               <button type="button" className="primary" onClick={() => openInbox()}>
                 Open inbox
@@ -617,10 +616,13 @@ export default function App() {
         ) : null}
 
         {view === "Sources" ? (
-          <div className="panel-page">
-            <div className="toolbar panel-header">
-              <strong>Sources</strong>
-              <button type="button" onClick={() => void refreshSettings()}>
+          <div className="panel-page section-page">
+            <div className="section-header">
+              <div>
+                <div className="eyebrow">Sources</div>
+                <p>Choose which local session data Pulse watches.</p>
+              </div>
+              <button type="button" className="text-button" onClick={() => void refreshSettings()}>
                 Refresh
               </button>
             </div>
@@ -628,13 +630,8 @@ export default function App() {
             {!settings ? (
               <div className="empty-list">Loading sources…</div>
             ) : (
-              <div className="sources-page">
-                <div className="sources-intro">
-                  <div className="eyebrow">Local session tracking</div>
-                  <h1>Connect the work you already do.</h1>
-                  <p>Pulse only reads Claude and Codex sessions after you turn their source on. Your source data stays on this device.</p>
-                </div>
-                <section className="source-card">
+              <div className="section-content sources-page">
+                <section className="home-card source-card">
                   <div>
                     <h2>Claude</h2>
                     <p>Watch local Claude session files and infer task candidates with their evidence.</p>
@@ -652,7 +649,7 @@ export default function App() {
                     />
                   </label>
                 </section>
-                <section className="source-card">
+                <section className="home-card source-card">
                   <div>
                     <h2>Codex</h2>
                     <p>Watch local Codex session files and infer task candidates with their evidence.</p>
@@ -676,10 +673,13 @@ export default function App() {
         ) : null}
 
         {view === "Settings" ? (
-          <div className="panel-page">
-            <div className="toolbar panel-header">
-              <strong>Settings</strong>
-              <button type="button" onClick={() => void refreshSettings()}>
+          <div className="panel-page section-page">
+            <div className="section-header">
+              <div>
+                <div className="eyebrow">Settings</div>
+                <p>Manage privacy, exports, and local app details.</p>
+              </div>
+              <button type="button" className="text-button" onClick={() => void refreshSettings()}>
                 Refresh
               </button>
             </div>
@@ -687,8 +687,8 @@ export default function App() {
             {!settings ? (
               <div className="empty-list">Loading settings…</div>
             ) : (
-              <div className="settings">
-                <section>
+              <div className="section-content settings">
+                <section className="home-card settings-card">
                   <h3>Privacy / LLM</h3>
                   <p className="muted">
                     Backend: <code>{settings.llm_backend}</code>
@@ -719,7 +719,7 @@ export default function App() {
                   ) : null}
                 </section>
 
-                <section>
+                <section className="home-card settings-card">
                   <h3>Export</h3>
                   <div className="task-actions">
                     <button
@@ -750,7 +750,7 @@ export default function App() {
                   ) : null}
                 </section>
 
-                <section>
+                <section className="home-card settings-card">
                   <h3>Paths</h3>
                   <p className="muted">
                     Data: <code>{settings.data_dir}</code>
