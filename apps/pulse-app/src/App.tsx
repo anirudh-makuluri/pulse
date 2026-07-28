@@ -480,8 +480,8 @@ export default function App() {
             {syncingSessions ? "Syncing sessions..." : "Sync latest sessions"}
           </button>
           <div className="meta">
-            <div>{loading ? "Refreshing…" : "Live"}</div>
-            <div>{info}</div>
+            {/* <div>{loading ? "Refreshing…" : "Live"}</div> */}
+            {/* <div>{info}</div> */}
           </div>
         </div>
         </aside>
