@@ -41,6 +41,8 @@ const TASK_FILTERS: TaskFilter[] = [
   "All",
 ];
 
+const isDevelopment = import.meta.env.DEV;
+
 function shortId(id: string): string {
   return id.slice(0, 8);
 }
@@ -418,6 +420,7 @@ export default function App() {
         <div className="window-identity" data-tauri-drag-region>
           <img className="window-mark" src="/pulse-logo.png" alt="" aria-hidden="true" />
           <span>Pulse</span>
+          {isDevelopment && <span className="environment-label">( dev )</span>}
         </div>
         <div className="window-controls">
           <button

@@ -68,6 +68,36 @@
 
 * { box-sizing: border-box; }
 
+/* Keep scrollable panels consistent with the app's dark, tactile chrome. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3b4f40 var(--surface-lowest);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface-lowest);
+}
+
+::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 2px solid var(--surface-lowest);
+  border-radius: 999px;
+  background: #3b4f40;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--button-primary-border);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--surface-lowest);
+}
+
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 html, body, #root { margin: 0; height: 100%; overflow: hidden; }
@@ -110,6 +140,13 @@ button { -webkit-font-smoothing: antialiased; }
   height: 24px;
   object-fit: cover;
   border-radius: 8px;
+}
+
+.environment-label {
+  color: var(--tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
 }
 
 .window-context {
