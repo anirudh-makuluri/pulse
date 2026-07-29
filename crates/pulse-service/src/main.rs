@@ -306,7 +306,15 @@ impl RpcHandler for ServiceState {
                     .lock()
                     .map_err(|_| internal("config lock"))?
                     .clone();
-                let mut store = self.store.lock().map_err(|_| internal("store lock"))?;
+                // Session discovery and remote analysis can take minutes.  Do
+                // not borrow the service's shared Store for that whole time:
+                // regular UI RPCs (tasks list/detail, reminders, etc.) would
+                // otherwise wait on its mutex and make the desktop app appear
+                // unresponsive. A dedicated WAL connection only holds SQLite
+                // locks for its individual write statements.
+                let conn = open_db(&self.paths.db_path())
+                    .map_err(|e| RpcErrorObject::new(RpcCode::InternalError, e.to_string()))?;
+                let mut store = Store::new(conn);
                 let result = pipeline::sync_recent_sessions(&mut store, &cfg)
                     .map_err(|e| RpcErrorObject::new(RpcCode::InvalidParams, e))?;
                 Ok(serde_json::to_value(result).unwrap_or_else(|_| json!({})))
