@@ -200,6 +200,9 @@ fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "Pulse workspace unavailable".to_string())?;
+    if main.is_minimized().map_err(|e| e.to_string())? {
+        main.unminimize().map_err(|e| e.to_string())?;
+    }
     main.show().map_err(|e| e.to_string())?;
     main.set_focus().map_err(|e| e.to_string())
 }
@@ -995,6 +998,11 @@ pub fn run() {
             }
             start_desktop_reminder_actions(app.handle().clone());
             start_active_window_tracker(app.state::<ContextTracker>().0.clone());
+            // The primary window starts hidden so the tray and pet can be
+            // configured before it is painted. A launch from the desktop
+            // shortcut must still open Pulse rather than leaving only a tray
+            // icon behind.
+            show_main_window(app.handle().clone())?;
             Ok(())
         })
         .on_tray_icon_event(|app, event| {
