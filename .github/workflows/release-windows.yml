@@ -2,15 +2,8 @@ name: Release Windows app
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/release-windows.yml"
-      - "apps/pulse-app/**"
-      - "crates/**"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "rust-toolchain.toml"
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -40,6 +33,9 @@ jobs:
 
       - name: Build NSIS installer
         working-directory: apps/pulse-app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --bundles nsis
 
       - name: Prepare release details
@@ -47,19 +43,41 @@ jobs:
         shell: pwsh
         run: |
           $appConfig = Get-Content "apps/pulse-app/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+          if ($env:GITHUB_REF_NAME -ne "v$($appConfig.version)") {
+            throw "Release tag ($env:GITHUB_REF_NAME) must match app version (v$($appConfig.version))."
+          }
           $installer = Get-ChildItem "target/release/bundle/nsis/*.exe" -File | Select-Object -First 1
           if ($null -eq $installer) {
             throw "NSIS installer was not produced."
           }
+          $signature = Get-ChildItem "target/release/bundle/nsis/*.exe.sig" -File | Select-Object -First 1
+          if ($null -eq $signature) {
+            throw "Updater signature was not produced. Check TAURI_SIGNING_PRIVATE_KEY."
+          }
           $releaseInstaller = Join-Path $env:RUNNER_TEMP "Pulse-Setup-x64.exe"
+          $releaseManifest = Join-Path $env:RUNNER_TEMP "latest.json"
           Copy-Item $installer.FullName $releaseInstaller
-          "tag=v$($appConfig.version)-main.${{ github.run_number }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "title=Pulse v$($appConfig.version) (build ${{ github.run_number }})" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $tag = "v$($appConfig.version)"
+          $manifest = @{
+            version = $appConfig.version
+            notes = "See the release notes for Pulse $tag."
+            pub_date = (Get-Date).ToUniversalTime().ToString("o")
+            platforms = @{
+              "windows-x86_64" = @{
+                url = "https://github.com/anirudh-makuluri/pulse/releases/download/$tag/Pulse-Setup-x64.exe"
+                signature = (Get-Content $signature.FullName -Raw).Trim()
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $releaseManifest -Encoding utf8NoBOM
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "title=Pulse $tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "installer=$releaseInstaller" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "manifest=$releaseManifest" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Create GitHub release and upload installer
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          gh release create "${{ steps.release.outputs.tag }}" "${{ steps.release.outputs.installer }}" --target "${{ github.sha }}" --title "${{ steps.release.outputs.title }}" --generate-notes --latest
+          gh release create "${{ steps.release.outputs.tag }}" "${{ steps.release.outputs.installer }}" "${{ steps.release.outputs.manifest }}" --target "${{ github.sha }}" --title "${{ steps.release.outputs.title }}" --generate-notes --latest

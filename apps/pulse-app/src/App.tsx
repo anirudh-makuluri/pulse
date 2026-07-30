@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { check } from "@tauri-apps/plugin-updater";
 import { Database, House, Inbox as InboxIcon, Settings as SettingsIcon } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -176,6 +177,8 @@ export default function App() {
   const [title, setTitle] = useState("");
   const [captureOpen, setCaptureOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [checkingForUpdate, setCheckingForUpdate] = useState(false);
   const [info, setInfo] = useState("…");
   const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState<SettingsSnapshot | null>(null);
@@ -240,6 +243,29 @@ export default function App() {
       setInfo(s.service_line);
     } catch (e) {
       setError(String(e));
+    }
+  }, []);
+
+  const checkForUpdates = useCallback(async () => {
+    setCheckingForUpdate(true);
+    setUpdateStatus("Checking for updates…");
+    setError(null);
+    try {
+      const update = await check();
+      if (!update) {
+        setUpdateStatus("Pulse is up to date.");
+        return;
+      }
+
+      setUpdateStatus(`Downloading Pulse ${update.version}…`);
+      await update.downloadAndInstall();
+      // Windows exits Pulse while the signed NSIS installer applies the update.
+      setUpdateStatus("Update installed. Restart Pulse to finish.");
+    } catch (err) {
+      setUpdateStatus(null);
+      setError(`Could not update Pulse: ${String(err)}`);
+    } finally {
+      setCheckingForUpdate(false);
     }
   }, []);
 
@@ -779,6 +805,15 @@ export default function App() {
                     }
                     aria-label="Show desktop pet"
                   />
+                </section>
+
+                <section className="home-card settings-card">
+                  <h3>Software update</h3>
+                  <p className="muted">Check GitHub Releases for a signed Pulse update and install it automatically.</p>
+                  <button type="button" className="primary" onClick={() => void checkForUpdates()} disabled={checkingForUpdate}>
+                    {checkingForUpdate ? "Checking for updates…" : "Check for updates"}
+                  </button>
+                  {updateStatus ? <p className="muted" role="status">{updateStatus}</p> : null}
                 </section>
 
                 <section className="home-card settings-card">

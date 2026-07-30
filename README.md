@@ -54,6 +54,12 @@ service.
 
 Pulse does not require Rust, Node.js, or an agent API key to install or use.
 
+### Updating Pulse
+
+Open **Settings** in Pulse and choose **Check for updates**. When an update is
+available, Pulse downloads the signed installer, verifies it, and lets Windows
+apply it without needing to download and run the setup file yourself.
+
 If Windows shows a reputation warning, review the publisher and release page
 before choosing whether to continue. Releases are not yet code-signed.
 
@@ -117,6 +123,13 @@ The installer is written to:
 ```text
 target\release\bundle\nsis\Pulse_<version>_x64-setup.exe
 ```
+
+### Publishing an update
+
+Releases are published when a version tag (for example, `v0.1.3`) is pushed.
+Before creating that tag, increment the matching version in
+`apps/pulse-app/package.json`, `apps/pulse-app/src-tauri/Cargo.toml`, and
+`apps/pulse-app/src-tauri/tauri.conf.json`.
 
 ### CLI
 

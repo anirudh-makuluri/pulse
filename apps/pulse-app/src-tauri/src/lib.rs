@@ -1028,6 +1028,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             if let Err(error) = start_bundled_service(app) {
                 // The app retains direct-DB fallback; surface startup trouble in

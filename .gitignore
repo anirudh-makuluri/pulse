@@ -14,3 +14,4 @@ infra/aws/lambda/node_modules/
 .vscode/
 *.swp
 *.swo
+.tauri/
