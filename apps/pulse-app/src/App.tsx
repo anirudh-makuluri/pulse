@@ -61,6 +61,10 @@ function outcomeLabel(outcome: Task["sync_outcome"]): string | null {
   return null;
 }
 
+function isSessionSyncBusy(error: unknown): boolean {
+  return String(error).includes("Session sync is in progress");
+}
+
 function TaskPreview({
   task,
   onOpen,
@@ -179,6 +183,7 @@ export default function App() {
   const [exportPath, setExportPath] = useState<string | null>(null);
   const [syncingSessions, setSyncingSessions] = useState(false);
   const notifiedDue = useRef(new Set<string>());
+  const syncingSessionsRef = useRef(false);
 
   const isTaskView = view === "Inbox";
   const statusFilter = useMemo(
@@ -204,7 +209,7 @@ export default function App() {
   );
 
   const refreshTasks = useCallback(async () => {
-    if (!isTaskView) return;
+    if (!isTaskView || syncingSessionsRef.current) return;
     setLoading(true);
     setError(null);
     try {
@@ -219,7 +224,10 @@ export default function App() {
         setDetail(null);
       }
     } catch (e) {
-      setError(String(e));
+      // The service rejects reads while it holds the database lock for a
+      // session sync. Keep the currently rendered task list in place until
+      // the next successful refresh instead of flashing a transient error.
+      if (!isSessionSyncBusy(e)) setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -236,6 +244,7 @@ export default function App() {
   }, []);
 
   const refreshHome = useCallback(async () => {
+    if (syncingSessionsRef.current) return;
     setLoading(true);
     setError(null);
     try {
@@ -250,7 +259,7 @@ export default function App() {
       setSummaryText(text || "No summary for today yet.");
       setInfo(svc);
     } catch (e) {
-      setError(String(e));
+      if (!isSessionSyncBusy(e)) setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -374,6 +383,7 @@ export default function App() {
   }
 
   async function syncSessions() {
+    syncingSessionsRef.current = true;
     setSyncingSessions(true);
     setError(null);
     try {
@@ -387,6 +397,7 @@ export default function App() {
     } catch (err) {
       setError(String(err));
     } finally {
+      syncingSessionsRef.current = false;
       setSyncingSessions(false);
     }
   }
@@ -440,9 +451,9 @@ export default function App() {
           <button
             className="window-control close"
             type="button"
-            aria-label="Close window"
+            aria-label="Hide Pulse window"
             onMouseDown={(event) => event.stopPropagation()}
-            onClick={() => void desktopWindow.close()}
+            onClick={() => void desktopWindow.hide()}
           />
         </div>
       </header>
