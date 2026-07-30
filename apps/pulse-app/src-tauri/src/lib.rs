@@ -212,8 +212,9 @@ fn show_pulse_context_menu(app: tauri::AppHandle) -> Result<(), String> {
     {
         use windows_sys::Win32::Foundation::POINT;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, TrackPopupMenu, MF_STRING,
-            TPM_RETURNCMD,
+            AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, PostMessageW,
+            SetForegroundWindow, TrackPopupMenu, MF_STRING, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+            WM_NULL,
         };
 
         const OPEN_MAIN_ID: usize = 1;
@@ -241,17 +242,21 @@ fn show_pulse_context_menu(app: tauri::AppHandle) -> Result<(), String> {
                 DestroyMenu(menu);
                 return Err("could not read the cursor position".into());
             }
-            // TrackPopupMenu is synchronous, so this Win32 menu stays above the
-            // topmost pet until the user chooses an item or dismisses it.
+            // Windows only dismisses a popup menu after an outside click when
+            // its owner is foreground. This matters for both the tray (which
+            // has no window of its own) and the always-on-top pet. The null
+            // message completes the native menu-dismissal cycle afterwards.
+            let _ = SetForegroundWindow(hwnd);
             let selected = TrackPopupMenu(
                 menu,
-                TPM_RETURNCMD,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON,
                 point.x,
                 point.y,
                 0,
                 hwnd,
                 std::ptr::null(),
             );
+            let _ = PostMessageW(hwnd, WM_NULL, 0, 0);
             DestroyMenu(menu);
             if selected as usize == OPEN_MAIN_ID {
                 return show_main_window(app);
