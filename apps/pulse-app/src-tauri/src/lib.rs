@@ -141,11 +141,45 @@ fn pin_pet_to_bottom_right<R: tauri::Runtime>(
         .ok_or_else(|| "no display available for Pulse pet".to_string())?;
     let area = monitor.work_area();
     let size = window.outer_size().map_err(|e| e.to_string())?;
-    let x = area.position.x + area.size.width as i32 - size.width as i32 - 18;
-    let y = area.position.y + area.size.height as i32 - size.height as i32 - 18;
     window
-        .set_position(PhysicalPosition::new(x, y))
+        .set_position(pet_bottom_right_position(area.position, area.size, size))
         .map_err(|e| e.to_string())
+}
+
+fn pet_bottom_right_position(
+    area_position: PhysicalPosition<i32>,
+    area_size: tauri::PhysicalSize<u32>,
+    pet_size: tauri::PhysicalSize<u32>,
+) -> PhysicalPosition<i32> {
+    let x = area_position.x + area_size.width as i32 - pet_size.width as i32 - 18;
+    let y = area_position.y + area_size.height as i32 - pet_size.height as i32 - 18;
+    PhysicalPosition::new(x, y)
+}
+
+fn pet_position_for_logical_size<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    size: tauri::LogicalSize<f64>,
+) -> Result<PhysicalPosition<i32>, String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| e.to_string())?
+        .or(window.primary_monitor().map_err(|e| e.to_string())?)
+        .ok_or_else(|| "no display available for Pulse pet".to_string())?;
+    let area = monitor.work_area();
+    let physical_size = size.to_physical::<u32>(monitor.scale_factor());
+    Ok(pet_bottom_right_position(
+        area.position,
+        area.size,
+        physical_size,
+    ))
+}
+
+fn pet_logical_size(expanded: bool) -> tauri::LogicalSize<f64> {
+    if expanded {
+        tauri::LogicalSize::new(460.0, 500.0)
+    } else {
+        tauri::LogicalSize::new(68.0, 68.0)
+    }
 }
 
 #[tauri::command]
@@ -161,21 +195,21 @@ fn set_pet_expanded(
         pet.hide().map_err(|e| e.to_string())?;
         return Ok(());
     }
-    // Resizing a transparent, always-on-top window while it is visible briefly
-    // exposes its old top-left position on Windows. Hide it for the resize and
-    // bottom-right pinning step, then restore it in its stable location.
+    let size = pet_logical_size(expanded);
+    // Work out the final top-left corner before changing dimensions. A native
+    // resize keeps the old top-left corner, which would otherwise briefly show
+    // the expanded transparent pet in the middle/right of the display.
+    let target_position = pet_position_for_logical_size(&pet, size)?;
     let was_visible = pet.is_visible().map_err(|e| e.to_string())?;
     if was_visible {
         pet.hide().map_err(|e| e.to_string())?;
     }
-    let resize_result = if expanded {
-        pet.set_size(tauri::LogicalSize::new(460.0, 500.0))
-            .map_err(|e| e.to_string())
-    } else {
-        pet.set_size(tauri::LogicalSize::new(68.0, 68.0))
-            .map_err(|e| e.to_string())
-    };
-    let result = resize_result.and_then(|_| pin_pet_to_bottom_right(&pet));
+    // Moving first anchors both the old and new sizes at the bottom-right, so
+    // Windows never paints an intermediate oversized frame at the old location.
+    let result = pet
+        .set_position(target_position)
+        .map_err(|e| e.to_string())
+        .and_then(|_| pet.set_size(size).map_err(|e| e.to_string()));
     if was_visible {
         // Windows can restore a hidden frameless window to the taskbar. Apply
         // the companion style again before it becomes visible.
@@ -183,6 +217,22 @@ fn set_pet_expanded(
         pet.show().map_err(|e| e.to_string())?;
     }
     result
+}
+
+#[cfg(test)]
+mod pet_window_tests {
+    use super::*;
+
+    #[test]
+    fn bottom_right_position_accounts_for_monitor_offset_and_pet_size() {
+        let position = pet_bottom_right_position(
+            PhysicalPosition::new(-1920, 0),
+            tauri::PhysicalSize::new(1920, 1080),
+            tauri::PhysicalSize::new(460, 500),
+        );
+
+        assert_eq!(position, PhysicalPosition::new(-478, 562));
+    }
 }
 
 fn reveal_task_context(app: &tauri::AppHandle, task_id: &str) -> Result<(), String> {
