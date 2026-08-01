@@ -1,4 +1,5 @@
 import { setSourceEnabled } from "@/api";
+import { Switch } from "@/components/ui/switch";
 import { useAppStore } from "@/store/useAppStore";
 
 type SourcesPageProps = {
@@ -40,28 +41,28 @@ export function SourcesPage({ onRefresh }: SourcesPageProps) {
               <h2>Claude</h2>
               <p>Watch local Claude session files and infer task candidates with their evidence.</p>
             </div>
-            <label className="toggle source-toggle">
+            <div className="source-toggle">
               <span>{settings.claude_enabled ? "Watching" : "Off"}</span>
-              <input
-                type="checkbox"
+              <Switch
                 checked={settings.claude_enabled}
-                onChange={(event) => void updateSource("claude", event.target.checked)}
+                onCheckedChange={(enabled) => void updateSource("claude", enabled)}
+                aria-label="Watch Claude session files"
               />
-            </label>
+            </div>
           </section>
           <section className="home-card source-card">
             <div>
               <h2>Codex</h2>
               <p>Watch local Codex session files and infer task candidates with their evidence.</p>
             </div>
-            <label className="toggle source-toggle">
+            <div className="source-toggle">
               <span>{settings.codex_enabled ? "Watching" : "Off"}</span>
-              <input
-                type="checkbox"
+              <Switch
                 checked={settings.codex_enabled}
-                onChange={(event) => void updateSource("codex", event.target.checked)}
+                onCheckedChange={(enabled) => void updateSource("codex", enabled)}
+                aria-label="Watch Codex session files"
               />
-            </label>
+            </div>
           </section>
         </div>
       )}
