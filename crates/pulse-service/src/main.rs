@@ -71,7 +71,7 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
         paths: paths.clone(),
         store: Arc::clone(&store),
         config: Arc::clone(&config),
-        session_sync_active: AtomicBool::new(false),
+        session_sync_active: Arc::new(AtomicBool::new(false)),
         shutdown: Arc::new(AtomicBool::new(false)),
         started_at: Utc::now(),
         pid: current_pid(),
@@ -94,6 +94,11 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
     // Start source inference poller (PR4: heuristic only).
     let pipeline = pipeline::start_pipeline(Arc::clone(&store), Arc::clone(&config), 30);
     let reminder_scheduler = start_reminder_scheduler(Arc::clone(&store));
+    let session_sync_scheduler = start_session_sync_scheduler(
+        paths.clone(),
+        Arc::clone(&config),
+        Arc::clone(&state.session_sync_active),
+    );
     let sync_worker =
         pulse_service::sync::start_sync_worker(Arc::clone(&store), Arc::clone(&config));
 
@@ -112,6 +117,7 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
 
     pipeline.stop();
     reminder_scheduler.stop();
+    session_sync_scheduler.stop();
     sync_worker.stop();
     let _ = remove_pid_file_if_matches(&paths.service_pid_path(), state.pid, Some(&exe_path));
     result?;
@@ -170,6 +176,85 @@ struct ReminderScheduler {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
 }
+
+/// Reviews recently modified source sessions once an hour while the local
+/// service is running. The first review waits an hour so startup never causes
+/// unexpected remote analysis; users can still request an immediate sync.
+fn start_session_sync_scheduler(
+    paths: PulsePaths,
+    config: Arc<Mutex<Config>>,
+    session_sync_active: Arc<AtomicBool>,
+) -> SessionSyncScheduler {
+    const SYNC_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        while !worker_stop.load(Ordering::SeqCst) {
+            let mut waited = Duration::ZERO;
+            while waited < SYNC_INTERVAL && !worker_stop.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_secs(1));
+                waited += Duration::from_secs(1);
+            }
+            if worker_stop.load(Ordering::SeqCst) {
+                break;
+            }
+
+            // Manual and scheduled syncs must never analyze the same
+            // transcripts concurrently. If a manual sync is underway, the
+            // next hourly pass will pick up any remaining changes.
+            if session_sync_active.swap(true, Ordering::SeqCst) {
+                eprintln!("skipping scheduled session sync: another sync is in progress");
+                continue;
+            }
+            struct ResetSessionSync<'a>(&'a AtomicBool);
+            impl Drop for ResetSessionSync<'_> {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::SeqCst);
+                }
+            }
+            let _reset_session_sync = ResetSessionSync(&session_sync_active);
+
+            let cfg = match config.lock() {
+                Ok(config) => config.clone(),
+                Err(_) => {
+                    eprintln!("skipping scheduled session sync: configuration lock unavailable");
+                    continue;
+                }
+            };
+            let result = open_db(&paths.db_path())
+                .map(Store::new)
+                .map_err(|error| error.to_string())
+                .and_then(|mut store| pipeline::sync_recent_sessions(&mut store, &cfg));
+            match result {
+                Ok(result) => eprintln!(
+                    "scheduled session sync complete: {} added, {} updated, {} unchanged",
+                    result.tasks_created, result.tasks_updated, result.sessions_skipped_unchanged
+                ),
+                Err(error) => eprintln!("scheduled session sync failed: {error}"),
+            }
+        }
+    });
+
+    SessionSyncScheduler {
+        stop,
+        handle: Some(handle),
+    }
+}
+
+struct SessionSyncScheduler {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl SessionSyncScheduler {
+    fn stop(mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
 impl ReminderScheduler {
     fn stop(mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -183,7 +268,7 @@ struct ServiceState {
     paths: PulsePaths,
     store: Arc<Mutex<Store>>,
     config: Arc<Mutex<Config>>,
-    session_sync_active: AtomicBool,
+    session_sync_active: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     started_at: chrono::DateTime<Utc>,
     pid: u32,

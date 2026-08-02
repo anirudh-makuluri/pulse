@@ -40,9 +40,10 @@ context by hand.
    want Pulse to watch.
 2. Ensure a supported agent CLI is installed and signed in. Pulse resolves the
    first available CLI from its configured preference order.
-3. Choose **Sync latest sessions** in the sidebar. Pulse analyzes the recent
-   session excerpts and creates or updates Inbox tasks when it finds concrete
-   user-requested work.
+3. Pulse automatically checks the latest sessions once an hour while its local
+   service is running. Choose **Sync latest sessions** in the sidebar whenever
+   you want to run that check immediately. Pulse creates or updates Inbox tasks
+   when it finds concrete user-requested work.
 
 Session sync requires permission to use the configured remote agent CLI. Pulse
 shows the resolved backend in **Settings**. A sync that finds no actionable

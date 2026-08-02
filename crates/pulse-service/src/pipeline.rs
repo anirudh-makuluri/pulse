@@ -73,9 +73,9 @@ pub fn start_pipeline(
             };
 
             if let Ok(mut store) = store.lock() {
-                // Transcript analysis is intentionally user initiated. The old
-                // background path turned archival conversation into a noisy
-                // Inbox before the user had a chance to review it.
+                // Session transcript analysis runs in the service's hourly
+                // scheduler. This poller remains responsible only for local
+                // housekeeping such as the end-of-day summary.
                 maybe_auto_summary(&mut store, &cfg, &mut last_summary_day);
             }
 
