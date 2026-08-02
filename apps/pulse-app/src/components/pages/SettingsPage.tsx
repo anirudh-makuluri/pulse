@@ -17,14 +17,14 @@ export function SettingsPage({ onRefresh, onCheckForUpdates }: SettingsPageProps
 	const setError = useAppStore((state) => state.setError);
 	const setExportPath = useAppStore((state) => state.setExportPath);
 
-	async function acknowledgePrivacy() {
-		try {
-			await privacyAcknowledge();
-			await onRefresh();
-		} catch (err) {
-			setError(String(err));
-		}
-	}
+	// async function acknowledgePrivacy() {
+	// 	try {
+	// 		await privacyAcknowledge();
+	// 		await onRefresh();
+	// 	} catch (err) {
+	// 		setError(String(err));
+	// 	}
+	// }
 
 	async function exportData(format: "json" | "md") {
 		try {

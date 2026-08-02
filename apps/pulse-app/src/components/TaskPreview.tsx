@@ -1,8 +1,8 @@
 import type { Task } from "@/types";
 
-function shortId(id: string): string {
-  return id.slice(0, 8);
-}
+// function shortId(id: string): string {
+//   return id.slice(0, 8);
+// }
 
 export function sourceClass(source: string): string {
   const normalized = source.toLowerCase();
