@@ -33,6 +33,12 @@ export interface TaskDetail {
   evidence: Evidence[];
 }
 
+export interface SemanticSearchResult {
+  task: Task;
+  cosine_distance: number;
+  source_type: string;
+}
+
 export interface Session {
   id: string;
   task_id: string;

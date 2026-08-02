@@ -31,6 +31,13 @@ struct TaskDetail {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct SemanticSearchResult {
+    task: Task,
+    cosine_distance: f64,
+    source_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct ActivityTimeline {
     task: Task,
     evidence: Vec<Evidence>,
@@ -777,6 +784,28 @@ fn get_activity_timeline(id: String) -> Result<ActivityTimeline, String> {
 }
 
 #[tauri::command]
+fn semantic_search(query: String) -> Result<Vec<SemanticSearchResult>, String> {
+    let paths = paths()?;
+    let cfg = load_config(&paths.config_path()).map_err(|e| e.to_string())?;
+    let mut client = try_connect(&cfg.service.pipe_name).map_err(|_| {
+        "Pulse service is unavailable; semantic search needs the running service.".to_string()
+    })?;
+    let result = client
+        .call_raw(
+            "activities.semantic_search",
+            serde_json::json!({ "query": query, "limit": 5 }),
+        )
+        .map_err(|e| e.to_string())?;
+    serde_json::from_value(
+        result
+            .get("results")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .map_err(|e| format!("decode semantic search results: {e}"))
+}
+
+#[tauri::command]
 fn create_task(title: String, today: bool) -> Result<Task, String> {
     let paths = paths()?;
     let cfg = load_config(&paths.config_path()).map_err(|e| e.to_string())?;
@@ -1115,6 +1144,7 @@ pub fn run() {
             list_tasks,
             get_task,
             get_activity_timeline,
+            semantic_search,
             create_task,
             set_task_status,
             set_task_outcome,

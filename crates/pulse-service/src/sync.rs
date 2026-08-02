@@ -15,6 +15,23 @@ use pulse_llm::HuggingFaceEmbeddingClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// A nearest-neighbour match returned by the cloud semantic-search endpoint.
+/// The desktop resolves `activity_id` to its local activity before presenting
+/// the result, so the UI never needs a database credential or sync token.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SemanticSearchHit {
+    pub source_type: String,
+    pub source_id: String,
+    pub activity_id: String,
+    pub content: String,
+    pub cosine_distance: f64,
+}
+
+#[derive(Deserialize)]
+struct SemanticSearchResponse {
+    results: Vec<SemanticSearchHit>,
+}
+
 pub struct SyncWorker {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
@@ -231,6 +248,62 @@ fn artifact_upload_endpoint(sync_endpoint: &str) -> Result<String, String> {
     Ok(format!("{base}/v1/pulse/artifacts/upload-url"))
 }
 
+fn semantic_search_endpoint(sync_endpoint: &str) -> Result<String, String> {
+    let base = sync_endpoint
+        .strip_suffix("/v1/pulse/sync")
+        .ok_or_else(|| {
+            "sync.endpoint must end with /v1/pulse/sync for semantic search".to_string()
+        })?;
+    Ok(format!("{base}/v1/pulse/search"))
+}
+
+/// Embed a user query locally and retrieve its closest cloud activity records.
+///
+/// The caller owns the embedding client so the long-lived service can keep the
+/// ONNX model in memory across debounced searches.
+pub fn semantic_search(
+    config: &Config,
+    query: &str,
+    limit: usize,
+    embeddings: &mut HuggingFaceEmbeddingClient,
+) -> Result<Vec<SemanticSearchHit>, String> {
+    if !config.sync.enabled {
+        return Err("Cloud sync is disabled; semantic search is unavailable.".into());
+    }
+    let query = query.trim();
+    if query.is_empty() || query.chars().count() > 10_000 {
+        return Err("search query must contain 1-10,000 characters".into());
+    }
+    let endpoint = config
+        .sync
+        .endpoint
+        .as_deref()
+        .ok_or_else(|| "cloud sync has no configured endpoint".to_string())?;
+    let token = std::env::var(&config.sync.token_env).map_err(|_| {
+        format!(
+            "cloud sync token environment variable {} is not set",
+            config.sync.token_env
+        )
+    })?;
+    let embedding = embeddings
+        .embed(vec![query.to_string()])
+        .map_err(|e| format!("generate search embedding: {e}"))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "search embedding provider returned no vector".to_string())?;
+    let response: SemanticSearchResponse = ureq::post(&semantic_search_endpoint(endpoint)?)
+        .set("content-type", "application/json")
+        .set("authorization", &format!("Bearer {token}"))
+        .send_json(serde_json::json!({
+            "embedding": embedding,
+            "limit": limit.clamp(1, 50),
+        }))
+        .map_err(|e| format!("semantic search request failed: {e}"))?
+        .into_json()
+        .map_err(|e| format!("decode semantic search response: {e}"))?;
+    Ok(response.results)
+}
+
 fn build_embeddings(
     config: &Config,
     records: &[SyncOutboxItem],
@@ -412,5 +485,14 @@ mod tests {
             "https://sync.example.com/v1/pulse/artifacts/upload-url"
         );
         assert!(artifact_upload_endpoint("https://sync.example.com/sync").is_err());
+    }
+
+    #[test]
+    fn derives_semantic_search_endpoint_from_sync_endpoint() {
+        assert_eq!(
+            semantic_search_endpoint("https://sync.example.com/v1/pulse/sync").unwrap(),
+            "https://sync.example.com/v1/pulse/search"
+        );
+        assert!(semantic_search_endpoint("https://sync.example.com/sync").is_err());
     }
 }

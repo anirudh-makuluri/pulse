@@ -17,9 +17,10 @@ use pulse_core::{
     Config, ExportFormat, NewCheckpoint, NewSession, NewTask, PulseError, PulsePaths, Store,
     SyncOutcome, TaskStatus, TaskUpdate,
 };
-use pulse_llm::llm_status;
-use pulse_service::pipeline;
+use pulse_llm::{llm_status, HuggingFaceEmbeddingClient};
+use pulse_service::{pipeline, sync};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 #[derive(Parser, Debug)]
 #[command(name = "pulse-service", version, about = "Pulse background service")]
@@ -72,6 +73,7 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
         store: Arc::clone(&store),
         config: Arc::clone(&config),
         session_sync_active: Arc::new(AtomicBool::new(false)),
+        semantic_search_embeddings: Mutex::new(None),
         shutdown: Arc::new(AtomicBool::new(false)),
         started_at: Utc::now(),
         pid: current_pid(),
@@ -269,6 +271,7 @@ struct ServiceState {
     store: Arc<Mutex<Store>>,
     config: Arc<Mutex<Config>>,
     session_sync_active: Arc<AtomicBool>,
+    semantic_search_embeddings: Mutex<Option<HuggingFaceEmbeddingClient>>,
     shutdown: Arc<AtomicBool>,
     started_at: chrono::DateTime<Utc>,
     pid: u32,
@@ -607,6 +610,80 @@ impl RpcHandler for ServiceState {
                 let task = store.resolve_task(&id).map_err(map_store_err)?;
                 let evidence = store.list_evidence(task.id).map_err(map_store_err)?;
                 Ok(json!({ "task": task, "evidence": evidence }))
+            }
+            "activities.semantic_search" => {
+                let query = param_str(&params, "query")?;
+                let limit = params
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(10)
+                    .clamp(1, 50) as usize;
+                let cfg = self
+                    .config
+                    .lock()
+                    .map_err(|_| internal("config lock"))?
+                    .clone();
+                let mut embeddings = self
+                    .semantic_search_embeddings
+                    .lock()
+                    .map_err(|_| internal("semantic search embedding lock"))?;
+                if embeddings.is_none() {
+                    *embeddings = Some(
+                        HuggingFaceEmbeddingClient::from_config(&cfg.embeddings).map_err(|e| {
+                            RpcErrorObject::new(
+                                RpcCode::Unavailable,
+                                format!("semantic search is unavailable: {e}"),
+                            )
+                        })?,
+                    );
+                }
+                let hits = sync::semantic_search(
+                    &cfg,
+                    &query,
+                    limit,
+                    embeddings.as_mut().expect("embedding client initialized"),
+                )
+                .map_err(|e| RpcErrorObject::new(RpcCode::Unavailable, e))?;
+                drop(embeddings);
+
+                // Multiple matching checkpoints or memories may point to the
+                // same activity. Keep its closest match so Inbox presents a
+                // concise activity-level result list.
+                let mut closest_by_activity = HashMap::new();
+                for hit in hits {
+                    let Ok(activity_id) = Uuid::parse_str(&hit.activity_id) else {
+                        continue;
+                    };
+                    let replace = closest_by_activity.get(&activity_id).is_none_or(
+                        |current: &sync::SemanticSearchHit| {
+                            hit.cosine_distance < current.cosine_distance
+                        },
+                    );
+                    if replace {
+                        closest_by_activity.insert(activity_id, hit);
+                    }
+                }
+                let mut hits: Vec<_> = closest_by_activity.into_iter().collect();
+                hits.sort_by(|(_, left), (_, right)| {
+                    left.cosine_distance.total_cmp(&right.cosine_distance)
+                });
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let results: Vec<_> = hits
+                    .into_iter()
+                    .filter_map(|(activity_id, hit)| {
+                        store
+                            .resolve_task(&activity_id.to_string())
+                            .ok()
+                            .map(|task| {
+                                json!({
+                                    "task": task,
+                                    "cosine_distance": hit.cosine_distance,
+                                    "source_type": hit.source_type,
+                                })
+                            })
+                    })
+                    .collect();
+                Ok(json!({ "results": results }))
             }
             "tasks.create" => {
                 let title = param_str(&params, "title")?;

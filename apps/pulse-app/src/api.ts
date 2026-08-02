@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ActivityTimeline, Reminder, Task, TaskDetail, TaskStatus } from "./types";
+import type { ActivityTimeline, Reminder, SemanticSearchResult, Task, TaskDetail, TaskStatus } from "./types";
 
 export interface ContextEnvelope {
   active_app: string | null;
@@ -68,6 +68,10 @@ export async function getTask(id: string): Promise<TaskDetail> {
 
 export async function getActivityTimeline(id: string): Promise<ActivityTimeline> {
   return invoke<ActivityTimeline>("get_activity_timeline", { id });
+}
+
+export async function semanticSearch(query: string): Promise<SemanticSearchResult[]> {
+  return invoke<SemanticSearchResult[]>("semantic_search", { query });
 }
 
 export async function createTask(title: string, today: boolean): Promise<Task> {
