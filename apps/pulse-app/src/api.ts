@@ -78,6 +78,12 @@ export async function setTaskStatus(id: string, status: TaskStatus): Promise<Tas
   return invoke<Task>("set_task_status", { id, status });
 }
 
+export type TaskOutcome = "completed" | "in_progress";
+
+export async function setTaskOutcome(id: string, outcome: TaskOutcome): Promise<Task> {
+  return invoke<Task>("set_task_outcome", { id, outcome });
+}
+
 export async function markDone(id: string): Promise<Task> {
   return invoke<Task>("mark_done", { id });
 }

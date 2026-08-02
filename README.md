@@ -22,14 +22,38 @@ context by hand.
 - Gives you a lightweight flow from **Inbox** to **Today**, **Next**,
   **Waiting**, and **Done**.
 - Captures tasks quickly and keeps the next action visible alongside the task.
+- Lets you set a task's observed outcome to **In progress** or **Completed**
+  without changing its workflow status.
 - Brings user-enabled Claude and Codex session activity into the same work
-  view, with the supporting evidence retained locally.
+  view. **Sync latest sessions** reviews up to five recently modified
+  transcripts from each enabled source and retains supporting evidence locally.
 - Shows the work to focus on now, items that need triage, and unfinished work
   you can continue.
 - Records a chronological activity timeline for tasks, sessions, reminders,
   checkpoints, evidence, memories, and artifacts.
-- Supports local reminders, daily summaries, exports, settings, and a desktop
-  companion for quick access.
+- Supports local reminders, daily summaries, JSON or Markdown exports, app
+  updates, and a desktop companion for quick access.
+
+## Using session sync
+
+1. In **Sources**, enable the local Claude and/or Codex session folders you
+   want Pulse to watch.
+2. Ensure a supported agent CLI is installed and signed in. Pulse resolves the
+   first available CLI from its configured preference order.
+3. Choose **Sync latest sessions** in the sidebar. Pulse analyzes the recent
+   session excerpts and creates or updates Inbox tasks when it finds concrete
+   user-requested work.
+
+Session sync requires permission to use the configured remote agent CLI. Pulse
+shows the resolved backend in **Settings**. A sync that finds no actionable
+work may complete without adding tasks.
+
+## Desktop behavior
+
+Pulse runs a local background service and system-tray icon while it is open.
+The top-right close control hides the main window, keeping Pulse available from
+the tray and, when enabled, the desktop companion. Use the tray or companion
+context menu and choose **Close Pulse** to exit the app and its bundled service.
 
 ## Local-first and private by default
 
@@ -98,6 +122,11 @@ cd apps/pulse-app
 npm install
 npm run tauri dev
 ```
+
+The normal desktop dev and build commands run `prepare:sidecar` first. On
+Windows it removes an orphaned debug `pulse-service.exe` left by an interrupted
+dev session, preventing Tauri's sidecar-copy `Access is denied` error. If a
+Pulse desktop window is still running, close it before rebuilding.
 
 ### Run the landing page
 

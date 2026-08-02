@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::error::{PulseError, Result};
 use crate::ipc::pipe;
 use crate::ipc::rpc::call;
-use crate::models::{Checkpoint, Evidence, Session, Task, TaskStatus};
+use crate::models::{Checkpoint, Evidence, Session, SyncOutcome, Task, TaskStatus};
 
 pub struct IpcClient {
     stream: std::fs::File,
@@ -92,6 +92,15 @@ impl IpcClient {
 
     pub fn tasks_done(&mut self, id: &str) -> Result<Task> {
         let result = call(&mut self.stream, "tasks.done", json!({ "id": id }))?;
+        decode_task(result)
+    }
+
+    pub fn tasks_set_outcome(&mut self, id: &str, outcome: SyncOutcome) -> Result<Task> {
+        let result = call(
+            &mut self.stream,
+            "tasks.update",
+            json!({ "id": id, "sync_outcome": outcome }),
+        )?;
         decode_task(result)
     }
 

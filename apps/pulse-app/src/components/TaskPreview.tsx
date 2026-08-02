@@ -37,14 +37,14 @@ export function TaskPreview({
     <button className={compact ? "home-task" : `task ${selected ? "selected" : ""}`} onClick={onOpen}>
       <div className="task-title">{task.title}</div>
       <div className="task-meta">
-        {!compact ? <span className="pill">{shortId(task.id)}</span> : null}
+        {/* {!compact ? <span className="pill">{shortId(task.id)}</span> : null} */}
         <span className="pill">{task.status}</span>
         <span className={`pill ${sourceClass(task.source)}`}>{task.source}</span>
         {outcome ? <span className={`pill outcome-${task.sync_outcome}`}>{outcome}</span> : null}
         {task.project ? <span className="pill">{task.project}</span> : null}
-        {!compact && task.confidence != null ? (
+        {/* {!compact && task.confidence != null ? (
           <span className="pill">conf {(task.confidence * 100).toFixed(0)}%</span>
-        ) : null}
+        ) : null} */}
       </div>
       {compact && task.suggested_next_action ? (
         <div className="home-task-next">{task.suggested_next_action}</div>

@@ -1,8 +1,8 @@
 use pulse_core::{
     export_history, load_config, open_db, parse_omnibox, try_connect, write_config, ActivityEvent,
     Artifact, Checkpoint, Evidence, ExportFormat, Memory, NewActivityEvent, NewReminder, NewTask,
-    OmniboxIntent, ParsedOmniboxIntent, PulsePaths, Reminder, ReminderStatus, Session, Store, Task,
-    TaskStatus, TaskUpdate,
+    OmniboxIntent, ParsedOmniboxIntent, PulsePaths, Reminder, ReminderStatus, Session, Store,
+    SyncOutcome, Task, TaskStatus, TaskUpdate,
 };
 use pulse_llm::llm_status;
 use serde::{Deserialize, Serialize};
@@ -818,6 +818,33 @@ fn set_task_status(id: String, status: String) -> Result<Task, String> {
 }
 
 #[tauri::command]
+fn set_task_outcome(id: String, outcome: String) -> Result<Task, String> {
+    let outcome = match outcome.as_str() {
+        "completed" => SyncOutcome::Completed,
+        "in_progress" => SyncOutcome::InProgress,
+        _ => return Err("outcome must be completed or in_progress".into()),
+    };
+    let paths = paths()?;
+    let cfg = load_config(&paths.config_path()).map_err(|e| e.to_string())?;
+    if let Ok(mut client) = try_connect(&cfg.service.pipe_name) {
+        return client
+            .tasks_set_outcome(&id, outcome)
+            .map_err(|e| e.to_string());
+    }
+    let store = open_store()?;
+    let task = store.resolve_task(&id).map_err(|e| e.to_string())?;
+    store
+        .update_task(
+            task.id,
+            TaskUpdate {
+                sync_outcome: Some(outcome),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn mark_done(id: String) -> Result<Task, String> {
     let paths = paths()?;
     let cfg = load_config(&paths.config_path()).map_err(|e| e.to_string())?;
@@ -1090,6 +1117,7 @@ pub fn run() {
             get_activity_timeline,
             create_task,
             set_task_status,
+            set_task_outcome,
             mark_done,
             delete_task,
             service_info,

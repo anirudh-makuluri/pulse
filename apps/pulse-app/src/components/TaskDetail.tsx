@@ -1,4 +1,5 @@
 import { outcomeLabel, sourceClass } from "@/components/TaskPreview";
+import type { TaskOutcome } from "@/api";
 import { useAppStore } from "@/store/useAppStore";
 import type { ActivityTimeline, TaskStatus } from "@/types";
 import type { ReactNode } from "react";
@@ -67,11 +68,12 @@ function timelineEntries(timeline: ActivityTimeline): TimelineEntry[] {
 
 type TaskDetailProps = {
   onMove: (status: TaskStatus) => void;
+  onOutcome: (outcome: TaskOutcome) => void;
   onDone: () => void;
   onDelete: () => void;
 };
 
-export function TaskDetail({ onMove, onDone, onDelete }: TaskDetailProps) {
+export function TaskDetail({ onMove, onOutcome, onDone, onDelete }: TaskDetailProps) {
   const detail = useAppStore((state) => state.detail);
 
   if (!detail) {
@@ -98,6 +100,22 @@ export function TaskDetail({ onMove, onDone, onDelete }: TaskDetailProps) {
         <button onClick={() => onMove("Inbox")}>Inbox</button>
         <button className="primary" onClick={onDone}>Done</button>
         <button className="danger" onClick={onDelete}>Delete</button>
+      </div>
+
+      <div className="task-outcome" aria-label="Task outcome">
+        <span>Outcome</span>
+        <button
+          className={detail.task.sync_outcome === "in_progress" ? "selected" : ""}
+          onClick={() => onOutcome("in_progress")}
+        >
+          In progress
+        </button>
+        <button
+          className={detail.task.sync_outcome === "completed" ? "selected" : ""}
+          onClick={() => onOutcome("completed")}
+        >
+          Completed
+        </button>
       </div>
 
       {detail.task.notes ? <DetailSection title="Notes"><pre>{detail.task.notes}</pre></DetailSection> : null}

@@ -311,8 +311,8 @@ button { -webkit-font-smoothing: antialiased; }
 
 .list { overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
 .task { text-align: left; border: 0; background: linear-gradient(145deg, #1b120f, #15100d); border-radius: 14px; padding: 18px 20px; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24); cursor: pointer; color: inherit; transition: background 120ms ease, box-shadow 120ms ease; }
-.task:hover, .task.selected { background: linear-gradient(145deg, #25321f, #171b13); }
-.task.selected { box-shadow: inset 3px 0 0 var(--accent); }
+.task:not(.selected):hover { background: linear-gradient(145deg, #241915, #1d1512); }
+.task.selected { background: linear-gradient(145deg, #25321f, #171b13); }
 .task-title { font-weight: 600; margin-bottom: 7px; letter-spacing: -0.01em; }
 .task-meta { display: flex; flex-wrap: wrap; gap: 6px; color: var(--muted); font-size: 12px; }
 .pill { border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; background: rgba(255, 255, 255, 0.025); }
@@ -339,6 +339,8 @@ button { -webkit-font-smoothing: antialiased; }
 .timeline-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }.timeline-meta span { color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }.timeline-meta time { text-align: right; }
 .timeline-title { margin-top: 4px; color: var(--text); font-size: 13px; word-break: break-word; }.timeline-detail { margin-top: 5px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .task-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+.task-outcome { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+.task-outcome button.selected { border-color: var(--button-primary-border); background: var(--button-primary); color: var(--button-primary-text); }
 
 .error { margin: 0 16px 12px; padding: 10px 12px; border-radius: var(--radius); background: rgba(147, 0, 10, 0.25); border: 1px solid rgba(255, 180, 171, 0.35); color: var(--danger); }
 .empty-list { color: var(--muted); padding: 40px 12px; text-align: center; }

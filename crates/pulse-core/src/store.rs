@@ -1444,6 +1444,25 @@ mod tests {
     }
 
     #[test]
+    fn updates_task_outcome() {
+        let s = store();
+        let task = s.create_task(NewTask::manual("Track task outcome")).unwrap();
+
+        let updated = s
+            .update_task(
+                task.id,
+                TaskUpdate {
+                    sync_outcome: Some(SyncOutcome::Completed),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(updated.sync_outcome, Some(SyncOutcome::Completed));
+        assert_eq!(s.get_task(task.id).unwrap().unwrap().sync_outcome, Some(SyncOutcome::Completed));
+    }
+
+    #[test]
     fn rejects_invalid_transition() {
         let s = store();
         let t = s.create_task(NewTask::manual("done path")).unwrap();

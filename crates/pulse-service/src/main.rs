@@ -15,7 +15,7 @@ use pulse_core::ipc::rpc::{RpcCode, RpcErrorObject, RpcHandler};
 use pulse_core::{
     apply_checkin_answer, export_history, load_config, open_db, parse_answer_input, write_config,
     Config, ExportFormat, NewCheckpoint, NewSession, NewTask, PulseError, PulsePaths, Store,
-    TaskStatus, TaskUpdate,
+    SyncOutcome, TaskStatus, TaskUpdate,
 };
 use pulse_llm::llm_status;
 use pulse_service::pipeline;
@@ -560,6 +560,19 @@ impl RpcHandler for ServiceState {
                     .get("notes")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                let sync_outcome = match params.get("sync_outcome") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => value
+                        .as_str()
+                        .and_then(SyncOutcome::parse)
+                        .ok_or_else(|| {
+                            RpcErrorObject::new(
+                                RpcCode::InvalidParams,
+                                "sync_outcome must be completed, in_progress, or unclear",
+                            )
+                        })
+                        .map(Some)?,
+                };
                 let store = self.store.lock().map_err(|_| internal("store lock"))?;
                 let task = store.resolve_task(&id).map_err(map_store_err)?;
                 let task = store
@@ -569,6 +582,7 @@ impl RpcHandler for ServiceState {
                             title,
                             status,
                             notes,
+                            sync_outcome,
                             ..Default::default()
                         },
                     )

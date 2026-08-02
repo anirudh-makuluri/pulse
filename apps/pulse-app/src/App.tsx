@@ -12,6 +12,7 @@ import {
   listTasks,
   markDone,
   serviceInfo,
+  setTaskOutcome,
   setTaskStatus,
   syncRecentSessions,
 } from "@/api";
@@ -25,6 +26,7 @@ import { SettingsPage } from "@/components/pages/SettingsPage";
 import { SourcesPage } from "@/components/pages/SourcesPage";
 import { useAppStore } from "@/store/useAppStore";
 import type { TaskStatus } from "@/types";
+import type { TaskOutcome } from "@/api";
 
 function isSessionSyncBusy(error: unknown): boolean {
   return String(error).includes("Session sync is in progress");
@@ -230,6 +232,17 @@ export default function App() {
     }
   }
 
+  async function updateTaskOutcome(outcome: TaskOutcome) {
+    if (!selectedId) return;
+    try {
+      await setTaskOutcome(selectedId, outcome);
+      await refreshTasks();
+      setDetail(await getActivityTimeline(selectedId));
+    } catch (error) {
+      setError(String(error));
+    }
+  }
+
   async function deleteSelectedTask() {
     const detail = useAppStore.getState().detail;
     if (!selectedId || !detail) return;
@@ -276,7 +289,7 @@ export default function App() {
           {view === "Sources" ? <SourcesPage onRefresh={refreshSettings} /> : null}
           {view === "Settings" ? <SettingsPage onRefresh={refreshSettings} onCheckForUpdates={() => void checkForUpdates()} /> : null}
         </main>
-        {isTaskView ? <TaskDetail onMove={(status) => void moveTask(status)} onDone={() => void completeTask()} onDelete={() => void deleteSelectedTask()} /> : null}
+        {isTaskView ? <TaskDetail onMove={(status) => void moveTask(status)} onOutcome={(outcome) => void updateTaskOutcome(outcome)} onDone={() => void completeTask()} onDelete={() => void deleteSelectedTask()} /> : null}
       </div>
       <CaptureTaskDialog onSubmit={addTask} />
     </div>
