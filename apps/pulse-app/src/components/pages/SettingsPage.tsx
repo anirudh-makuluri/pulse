@@ -1,4 +1,4 @@
-import { exportHistory, privacyAcknowledge, setPetVisible } from "@/api";
+import { exportHistory, setPetVisible } from "@/api";
 import { Switch } from "@/components/ui/switch";
 import { useAppStore } from "@/store/useAppStore";
 import { Button } from "../ui/button";
