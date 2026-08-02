@@ -156,10 +156,19 @@ target\release\bundle\nsis\Pulse_<version>_x64-setup.exe
 
 ### Publishing an update
 
-Releases are published when a version tag (for example, `v0.1.3`) is pushed.
-Before creating that tag, increment the matching version in
-`apps/pulse-app/package.json`, `apps/pulse-app/src-tauri/Cargo.toml`, and
-`apps/pulse-app/src-tauri/tauri.conf.json`.
+Create a release from the repository root with one command:
+
+```powershell
+.\scripts\release.ps1 0.1.8 -Push
+```
+
+The script validates the SemVer version, updates the desktop app's version in
+`package.json`, `package-lock.json`, `Cargo.toml`, and `tauri.conf.json`, then
+commits the change and creates the matching annotated `v0.1.8` tag. `-Push`
+pushes both the commit and tag to `origin`, which triggers the release
+workflow. Omit it to prepare the release locally first, or preview the work
+with `-DryRun`. A release run requires a clean working tree so the version
+commit and tag contain only the intended release changes.
 
 ### CLI
 

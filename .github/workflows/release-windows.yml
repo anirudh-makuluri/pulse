@@ -42,6 +42,28 @@ jobs:
         shell: pwsh
         run: |
           $appConfig = Get-Content "apps/pulse-app/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+          $packageJson = Get-Content "apps/pulse-app/package.json" -Raw
+          $packageLock = Get-Content "apps/pulse-app/package-lock.json" -Raw
+          $cargoToml = Get-Content "apps/pulse-app/src-tauri/Cargo.toml" -Raw
+          $packageVersionMatch = [regex]::Match($packageJson, '(?s)\A\s*\{\s*"name"\s*:\s*"pulse-app"\s*,\s*"private"\s*:\s*true\s*,\s*"version"\s*:\s*"([^"]+)"')
+          $packageLockVersionMatch = [regex]::Match($packageLock, '(?s)\A\s*\{\s*"name"\s*:\s*"pulse-app"\s*,\s*"version"\s*:\s*"([^"]+)"')
+          $packageLockWorkspaceVersionMatch = [regex]::Match($packageLock, '(?s)\A.*?"packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"pulse-app"\s*,\s*"version"\s*:\s*"([^"]+)"')
+          $cargoVersionMatch = [regex]::Match($cargoToml, '(?ms)^\[package\]\s+.*?^version\s*=\s*"([^"]+)"')
+          if (-not $packageVersionMatch.Success -or -not $packageLockVersionMatch.Success -or -not $packageLockWorkspaceVersionMatch.Success -or -not $cargoVersionMatch.Success) {
+            throw "Could not read a desktop app version from the release metadata."
+          }
+          $versions = @{
+            "package.json" = $packageVersionMatch.Groups[1].Value
+            "package-lock.json" = $packageLockVersionMatch.Groups[1].Value
+            "package-lock package" = $packageLockWorkspaceVersionMatch.Groups[1].Value
+            "Cargo.toml" = $cargoVersionMatch.Groups[1].Value
+            "tauri.conf.json" = $appConfig.version
+          }
+          $distinctVersions = @($versions.Values | Select-Object -Unique)
+          if ($distinctVersions.Count -ne 1) {
+            $details = ($versions.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ", "
+            throw "Desktop app versions must match before publishing: $details"
+          }
           if ($env:GITHUB_REF_NAME -ne "v$($appConfig.version)") {
             throw "Release tag ($env:GITHUB_REF_NAME) must match app version (v$($appConfig.version))."
           }
