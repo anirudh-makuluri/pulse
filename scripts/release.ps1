@@ -99,13 +99,17 @@ if ($DryRun) {
 }
 
 $gitAddArguments = @("add", "--") + $versionFiles
+$gitCommitArguments = @("commit", "-m", "chore(release): $tag")
+$gitTagArguments = @("tag", "-a", $tag, "-m", "Pulse $tag")
 Invoke-Git @gitAddArguments
-Invoke-Git commit -m "chore(release): $tag"
-Invoke-Git tag -a $tag -m "Pulse $tag"
+Invoke-Git @gitCommitArguments
+Invoke-Git @gitTagArguments
 
 if ($Push) {
-    Invoke-Git push origin HEAD
-    Invoke-Git push origin $tag
+    $gitPushHeadArguments = @("push", "origin", "HEAD")
+    $gitPushTagArguments = @("push", "origin", $tag)
+    Invoke-Git @gitPushHeadArguments
+    Invoke-Git @gitPushTagArguments
 }
 
 Write-Host "Created release commit and tag $tag."
