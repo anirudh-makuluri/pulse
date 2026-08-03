@@ -30,8 +30,9 @@ context by hand.
 - Shows the work to focus on now, items that need triage, and unfinished work
   you can continue.
 - Includes a **Task Copilot** for asking grounded questions such as "What
-  should I work on today?" or "What is blocked?" The Copilot is read-only in
-  this release: it cannot create, edit, complete, move, or delete tasks.
+  should I work on today?", "Add a task to review the proposal", or "Move
+  the proposal task to Today." It can create tasks and update their editable
+  fields, but cannot delete or schedule tasks.
 - Streams Copilot progress while it plans and looks up task context, then links
   the tasks that support its answer. Copilot conversations are saved locally;
   the UI exposes the five most recently updated sessions.
@@ -62,15 +63,18 @@ first prompt begins a local conversation; subsequent prompts stay in that
 conversation. Choose **History** in the top-right corner to reopen one of the
 five most recently updated conversations, or start a new one.
 
-To answer a question, the Copilot may make up to two local, read-only lookups:
+To answer a question, the Copilot may make up to two local tool calls. It can
+look up tasks to ground an answer or an edit:
 
 - list tasks, optionally by workflow status;
 - search task titles, notes, projects, and suggested next actions; or
 - open the current fields for a task returned by an earlier lookup.
 
-Pulse's service owns and validates these tools. The model receives task data
-only after it requests one of those tools, and Pulse only shows cited tasks that
-were actually returned by a lookup. Write tools are intentionally not enabled.
+For an explicit request, the Copilot can also create a task or update one task's
+title, workflow status, notes, project, suggested next action, or observed
+outcome. It cannot delete tasks, create reminders, or schedule work. Pulse's
+service owns and validates every tool call, and the model can only cite tasks
+returned by those tools.
 
 When a configured remote agent CLI is approved, the Copilot uses it to choose
 lookups and write the response. Otherwise Pulse uses its local heuristic

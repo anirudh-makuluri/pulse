@@ -495,9 +495,9 @@ fn run_copilot_agent(
             TaskCopilotStep::ToolCall { .. } => {
                 let tasks = available_tasks.into_values().take(3).collect::<Vec<_>>();
                 let answer: String = if tasks.is_empty() {
-                    "I used the available read-only lookups but did not find enough task context to answer that.".into()
+                    "I used the available task tools but did not find enough task context to answer that.".into()
                 } else {
-                    "I completed the two available read-only lookups. Here are the tasks that support the answer.".into()
+                    "I completed the two available task operations. Here are the tasks that support the answer.".into()
                 };
                 persist_copilot_reply(&store, conversation_id, &answer, Some(&backend), &tasks);
                 broker.publish(operation_id, json!({
@@ -922,7 +922,7 @@ impl RpcHandler for ServiceState {
                 let (operation_id, token) = self.copilot_progress.create();
                 let broker = Arc::clone(&self.copilot_progress);
                 let store = Arc::clone(&self.store);
-                let tools = CopilotToolRegistry::read_only_tasks();
+                let tools = CopilotToolRegistry::task_tools();
                 thread::spawn(move || run_copilot_agent(operation_id, conversation_id, query, cfg, store, broker, tools));
                 Ok(json!({
                     "operation_id": operation_id,

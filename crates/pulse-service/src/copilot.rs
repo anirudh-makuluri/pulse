@@ -1,17 +1,17 @@
-//! Service-owned registry for the Copilot's read-only task tools.
+//! Service-owned registry for the Copilot's bounded task tools.
 //!
 //! A tool's model-visible definition, progress label, access policy, and
 //! execution handler live together here. The agent loop consumes this registry
 //! instead of carrying a second list in its prompt or dispatch match.
 
-use pulse_core::{Store, Task, TaskStatus};
+use pulse_core::{NewTask, Store, SyncOutcome, Task, TaskStatus, TaskUpdate};
 use pulse_llm::{TaskCopilotTask, TaskCopilotToolDefinition};
 use serde_json::{json, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CopilotToolAccess {
     ReadOnly,
-    ConfirmedWrite,
+    UserRequestedWrite,
 }
 
 pub struct CopilotToolExecution {
@@ -33,7 +33,7 @@ pub struct CopilotToolRegistry {
 }
 
 impl CopilotToolRegistry {
-    pub fn read_only_tasks() -> Self {
+    pub fn task_tools() -> Self {
         Self {
             tools: vec![
                 RegisteredCopilotTool {
@@ -84,6 +84,53 @@ impl CopilotToolRegistry {
                     progress_label: "Opening task context",
                     handler: get_task,
                 },
+                RegisteredCopilotTool {
+                    definition: TaskCopilotToolDefinition {
+                        name: "create_task".into(),
+                        description: "Create one manual task requested by the user. This never deletes or schedules work.".into(),
+                        input_schema: json!({
+                            "type": "object",
+                            "required": ["title"],
+                            "properties": {
+                                "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+                                "status": { "type": "string", "enum": ["Inbox", "Today", "Next", "Waiting", "Done"] },
+                                "notes": { "type": "string", "maxLength": 4000 },
+                                "project": { "type": "string", "maxLength": 500 },
+                                "suggested_next_action": { "type": "string", "maxLength": 1000 },
+                                "sync_outcome": { "type": "string", "enum": ["in_progress", "completed", "unclear"] }
+                            }
+                        }),
+                    },
+                    access: CopilotToolAccess::UserRequestedWrite,
+                    progress_label: "Creating task",
+                    handler: create_task,
+                },
+                RegisteredCopilotTool {
+                    definition: TaskCopilotToolDefinition {
+                        name: "update_task".into(),
+                        description: "Update editable fields on one existing task the user explicitly identified. Use a task id returned by a prior tool result when one is needed.".into(),
+                        input_schema: json!({
+                            "type": "object",
+                            "required": ["id"],
+                            "properties": {
+                                "id": { "type": "string" },
+                                "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+                                "status": { "type": "string", "enum": ["Inbox", "Today", "Next", "Waiting", "Done"] },
+                                "notes": { "type": "string", "maxLength": 4000 },
+                                "project": { "type": "string", "maxLength": 500 },
+                                "suggested_next_action": { "type": "string", "maxLength": 1000 },
+                                "sync_outcome": { "type": "string", "enum": ["in_progress", "completed", "unclear"] }
+                            },
+                            "anyOf": [
+                                { "required": ["title"] }, { "required": ["status"] }, { "required": ["notes"] },
+                                { "required": ["project"] }, { "required": ["suggested_next_action"] }, { "required": ["sync_outcome"] }
+                            ]
+                        }),
+                    },
+                    access: CopilotToolAccess::UserRequestedWrite,
+                    progress_label: "Updating task",
+                    handler: update_task,
+                },
             ],
         }
     }
@@ -101,11 +148,52 @@ impl CopilotToolRegistry {
     pub fn execute(&self, store: &Store, name: &str, arguments: &Value) -> Result<CopilotToolExecution, String> {
         let tool = self.tools.iter().find(|tool| tool.definition.name == name)
             .ok_or("unknown copilot tool")?;
-        if tool.access != CopilotToolAccess::ReadOnly {
-            return Err("this tool requires explicit confirmation".into());
+        match tool.access {
+            // A Copilot turn is initiated by the user. Prompt rules additionally
+            // require that write tools mirror an explicit request in that turn.
+            CopilotToolAccess::ReadOnly | CopilotToolAccess::UserRequestedWrite => {
+                (tool.handler)(store, arguments)
+            }
         }
-        (tool.handler)(store, arguments)
     }
+}
+
+fn create_task(store: &Store, arguments: &Value) -> Result<CopilotToolExecution, String> {
+    let title = required_text(arguments, "title", 500)?;
+    let mut task = NewTask::manual(title);
+    task.status = optional_status(arguments)?.unwrap_or(TaskStatus::Inbox);
+    task.notes = optional_text(arguments, "notes", 4_000)?;
+    task.project = optional_text(arguments, "project", 500)?;
+    task.suggested_next_action = optional_text(arguments, "suggested_next_action", 1_000)?;
+    task.sync_outcome = optional_outcome(arguments)?;
+    let task = store.create_task(task).map_err(|error| error.to_string())?;
+    Ok(CopilotToolExecution {
+        payload: json!({ "task": task_view(&task), "action": "created" }),
+        tasks: vec![task],
+    })
+}
+
+fn update_task(store: &Store, arguments: &Value) -> Result<CopilotToolExecution, String> {
+    let id = required_text(arguments, "id", 64)?;
+    let update = TaskUpdate {
+        title: optional_text(arguments, "title", 500)?,
+        status: optional_status(arguments)?,
+        notes: optional_text(arguments, "notes", 4_000)?,
+        project: optional_text(arguments, "project", 500)?,
+        suggested_next_action: optional_text(arguments, "suggested_next_action", 1_000)?,
+        sync_outcome: optional_outcome(arguments)?,
+        ..Default::default()
+    };
+    if update.title.is_none() && update.status.is_none() && update.notes.is_none()
+        && update.project.is_none() && update.suggested_next_action.is_none() && update.sync_outcome.is_none() {
+        return Err("update_task requires at least one editable field".into());
+    }
+    let task = store.resolve_task(&id).and_then(|task| store.update_task(task.id, update))
+        .map_err(|error| error.to_string())?;
+    Ok(CopilotToolExecution {
+        payload: json!({ "task": task_view(&task), "action": "updated" }),
+        tasks: vec![task],
+    })
 }
 
 fn list_tasks(store: &Store, arguments: &Value) -> Result<CopilotToolExecution, String> {
@@ -150,6 +238,44 @@ fn parse_status(arguments: &Value) -> Result<Option<TaskStatus>, String> {
     }
 }
 
+fn optional_status(arguments: &Value) -> Result<Option<TaskStatus>, String> {
+    match arguments.get("status") {
+        Some(Value::String(status)) => TaskStatus::parse(status).map(Some).ok_or("invalid task status".into()),
+        Some(_) => Err("status must be a string".into()),
+        None => Ok(None),
+    }
+}
+
+fn optional_outcome(arguments: &Value) -> Result<Option<SyncOutcome>, String> {
+    match arguments.get("sync_outcome") {
+        Some(Value::String(outcome)) => SyncOutcome::parse(outcome).map(Some).ok_or("invalid task outcome".into()),
+        Some(_) => Err("sync_outcome must be a string".into()),
+        None => Ok(None),
+    }
+}
+
+fn required_text<'a>(arguments: &'a Value, field: &str, max_chars: usize) -> Result<&'a str, String> {
+    let value = arguments.get(field).and_then(Value::as_str).map(str::trim)
+        .filter(|value| !value.is_empty()).ok_or_else(|| format!("{field} requires non-empty text"))?;
+    if value.chars().count() > max_chars {
+        return Err(format!("{field} must be {max_chars} characters or fewer"));
+    }
+    Ok(value)
+}
+
+fn optional_text(arguments: &Value, field: &str, max_chars: usize) -> Result<Option<String>, String> {
+    match arguments.get(field) {
+        Some(Value::String(value)) => {
+            if value.chars().count() > max_chars {
+                return Err(format!("{field} must be {max_chars} characters or fewer"));
+            }
+            Ok(Some(value.trim().to_string()))
+        }
+        Some(_) => Err(format!("{field} must be a string")),
+        None => Ok(None),
+    }
+}
+
 fn task_view(task: &Task) -> TaskCopilotTask {
     TaskCopilotTask {
         id: task.id.to_string(),
@@ -171,13 +297,30 @@ fn task_matches(task: &Task, needle: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pulse_core::open_in_memory;
 
     #[test]
     fn registry_exposes_all_registered_tool_schemas() {
-        let registry = CopilotToolRegistry::read_only_tasks();
+        let registry = CopilotToolRegistry::task_tools();
         let definitions = registry.definitions();
-        assert_eq!(definitions.len(), 3);
+        assert_eq!(definitions.len(), 5);
         assert!(definitions.iter().all(|tool| tool.input_schema.is_object()));
         assert_eq!(registry.progress_label("search_tasks"), "Searching task text");
+    }
+
+    #[test]
+    fn registry_creates_and_updates_a_task() {
+        let store = Store::new(open_in_memory().unwrap());
+        let registry = CopilotToolRegistry::task_tools();
+        let created = registry.execute(&store, "create_task", &json!({
+            "title": "Prepare the deployment runbook", "status": "Today", "sync_outcome": "in_progress"
+        })).unwrap();
+        let id = created.tasks[0].id.to_string();
+        assert_eq!(created.tasks[0].status, TaskStatus::Today);
+        let updated = registry.execute(&store, "update_task", &json!({
+            "id": id, "status": "Done", "sync_outcome": "completed"
+        })).unwrap();
+        assert_eq!(updated.tasks[0].status, TaskStatus::Done);
+        assert_eq!(updated.tasks[0].sync_outcome, Some(SyncOutcome::Completed));
     }
 }

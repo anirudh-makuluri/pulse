@@ -60,8 +60,9 @@ pub struct SummaryOut {
     pub highlights: Vec<String>,
 }
 
-/// A deliberately bounded view of a task supplied to the read-only copilot.
-/// The model receives task data, never a database connection or write tool.
+/// A deliberately bounded view of a task supplied to the copilot.
+/// The model receives task data, never a database connection; the service owns
+/// and validates its narrow task-tool surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCopilotTask {
     pub id: String,
@@ -89,7 +90,7 @@ pub struct TaskCopilotOut {
 
 /// An agent turn contains only the user's question and previous tool results.
 /// Task data enters the transcript only after the model explicitly requests a
-/// read-only Pulse tool.
+/// service-owned Pulse tool.
 #[derive(Debug, Clone)]
 pub struct TaskCopilotAgentRequest {
     pub query: String,

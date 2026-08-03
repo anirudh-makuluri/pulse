@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { ArrowUpRight, History, Plus } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { copilotStart, getCopilotSession, listCopilotSessions, type CopilotResult, type CopilotSession, type CopilotStoredMessage } from "@/api";
 import { useAppStore } from "@/store/useAppStore";
 
@@ -196,7 +197,9 @@ export function CopilotPage() {
                       <span>Task Copilot</span>
                       <span>{message.result.backend === "heuristic" ? "Local fallback" : `Powered by ${message.result.backend}`}</span>
                     </div>
-                    <p>{message.result.answer}</p>
+                    <div className="copilot-markdown">
+                      <ReactMarkdown>{message.result.answer}</ReactMarkdown>
+                    </div>
                     <div className="copilot-citations">
                       <h2>Supporting tasks</h2>
                       {message.result.tasks.length ? message.result.tasks.map((task) => (
@@ -227,7 +230,7 @@ export function CopilotPage() {
           <div className="copilot-welcome-copy">
             <div className="eyebrow">Task Copilot</div>
             <h1>What can I help you move forward?</h1>
-            <p>Ask about your tasks, priorities, or blockers. I can read your work, but I can’t change it.</p>
+            <p>Ask about your tasks, priorities, or blockers—or ask me to add or update a task.</p>
           </div>
           {composer}
           <div className="copilot-empty">

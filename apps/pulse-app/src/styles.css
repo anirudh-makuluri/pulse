@@ -418,7 +418,18 @@ button { -webkit-font-smoothing: antialiased; }
 .copilot-answer { border: 1px solid rgba(173, 207, 180, 0.25); border-radius: 14px; padding: 20px; background: rgba(173, 207, 180, 0.05); }
 .copilot-answer-heading { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
 .copilot-answer-heading span:first-child { color: var(--accent); font-weight: 700; }
-.copilot-answer p { margin: 12px 0 0; white-space: pre-wrap; line-height: 1.6; }
+.copilot-markdown { margin-top: 12px; line-height: 1.6; }
+.copilot-markdown > :first-child { margin-top: 0; }
+.copilot-markdown > :last-child { margin-bottom: 0; }
+.copilot-markdown p { margin: 12px 0; white-space: pre-wrap; }
+.copilot-markdown h1, .copilot-markdown h2, .copilot-markdown h3 { margin: 18px 0 8px; color: var(--text); }
+.copilot-markdown h1 { font-size: 20px; }
+.copilot-markdown h2 { font-size: 17px; }
+.copilot-markdown h3 { font-size: 15px; }
+.copilot-markdown ul, .copilot-markdown ol { margin: 10px 0; padding-left: 22px; }
+.copilot-markdown li + li { margin-top: 4px; }
+.copilot-markdown a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.copilot-markdown code { border-radius: 4px; padding: 1px 4px; background: rgba(173, 207, 180, 0.14); font-size: 0.9em; }
 .copilot-thinking { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
 .copilot-thinking::before { width: 8px; height: 8px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; content: ""; animation: copilot-spin 800ms linear infinite; }
 .copilot-progress { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; }

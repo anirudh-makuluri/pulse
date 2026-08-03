@@ -117,6 +117,18 @@ pub fn parse_task_copilot(raw: &str) -> Result<TaskCopilotOut> {
 
 pub fn parse_task_copilot_step(raw: &str) -> Result<TaskCopilotStep> {
     let json = extract_json_object(raw)?;
+    // Grok's `--json-schema` headless mode emits a JSON CLI envelope whose
+    // `text` property contains the schema-constrained model response.
+    let envelope: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| LlmError::Parse(format!("invalid task copilot JSON: {e}")))?;
+    let json = if envelope.get("type").is_none() {
+        match envelope.get("text").and_then(serde_json::Value::as_str) {
+            Some(text) => extract_json_object(text)?,
+            None => json,
+        }
+    } else {
+        json
+    };
     let step: TaskCopilotStep = serde_json::from_str(&json)
         .map_err(|e| LlmError::Parse(format!("invalid task copilot step: {e}")))?;
     match &step {
@@ -166,6 +178,21 @@ mod tests {
                 assert_eq!(arguments["status"], "Today");
             }
             TaskCopilotStep::Final { .. } => panic!("expected a tool call"),
+        }
+    }
+
+    #[test]
+    fn parses_a_grok_structured_output_envelope() {
+        let step = parse_task_copilot_step(
+            r#"{"text":"{\"type\":\"final\",\"answer\":\"Marked it complete.\",\"cited_task_ids\":[\"task-123\"]}","stopReason":"end_turn"}"#,
+        )
+        .unwrap();
+        match step {
+            TaskCopilotStep::Final { answer, cited_task_ids } => {
+                assert_eq!(answer, "Marked it complete.");
+                assert_eq!(cited_task_ids, vec!["task-123"]);
+            }
+            TaskCopilotStep::ToolCall { .. } => panic!("expected a final response"),
         }
     }
 }
