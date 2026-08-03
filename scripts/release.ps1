@@ -98,7 +98,8 @@ if ($DryRun) {
     exit 0
 }
 
-Invoke-Git add -- $versionFiles
+$gitAddArguments = @("add", "--") + $versionFiles
+Invoke-Git @gitAddArguments
 Invoke-Git commit -m "chore(release): $tag"
 Invoke-Git tag -a $tag -m "Pulse $tag"
 
