@@ -29,6 +29,12 @@ context by hand.
   transcripts from each enabled source and retains supporting evidence locally.
 - Shows the work to focus on now, items that need triage, and unfinished work
   you can continue.
+- Includes a **Task Copilot** for asking grounded questions such as "What
+  should I work on today?" or "What is blocked?" The Copilot is read-only in
+  this release: it cannot create, edit, complete, move, or delete tasks.
+- Streams Copilot progress while it plans and looks up task context, then links
+  the tasks that support its answer. Copilot conversations are saved locally;
+  the UI exposes the five most recently updated sessions.
 - Records a chronological activity timeline for tasks, sessions, reminders,
   checkpoints, evidence, memories, and artifacts.
 - Supports local reminders, daily summaries, JSON or Markdown exports, app
@@ -49,6 +55,28 @@ Session sync requires permission to use the configured remote agent CLI. Pulse
 shows the resolved backend in **Settings**. A sync that finds no actionable
 work may complete without adding tasks.
 
+## Using Task Copilot
+
+Open **Task Copilot** from the sidebar and ask a question about your work. The
+first prompt begins a local conversation; subsequent prompts stay in that
+conversation. Choose **History** in the top-right corner to reopen one of the
+five most recently updated conversations, or start a new one.
+
+To answer a question, the Copilot may make up to two local, read-only lookups:
+
+- list tasks, optionally by workflow status;
+- search task titles, notes, projects, and suggested next actions; or
+- open the current fields for a task returned by an earlier lookup.
+
+Pulse's service owns and validates these tools. The model receives task data
+only after it requests one of those tools, and Pulse only shows cited tasks that
+were actually returned by a lookup. Write tools are intentionally not enabled.
+
+When a configured remote agent CLI is approved, the Copilot uses it to choose
+lookups and write the response. Otherwise Pulse uses its local heuristic
+fallback. Progress travels over a loopback-only WebSocket between the local
+service and desktop app; it is not a network service exposed to other devices.
+
 ## Desktop behavior
 
 Pulse runs a local background service and system-tray icon while it is open.
@@ -66,8 +94,12 @@ service.
 - Claude and Codex sources remain off until you enable them.
 - Pulse does not store model-provider API keys. It can use a supported agent
   CLI already installed on your `PATH` when you explicitly allow it.
-- Remote CLI-backed summaries require a privacy acknowledgement; otherwise
-  Pulse uses local heuristics.
+- Remote CLI-backed summaries and Copilot responses require a privacy
+  acknowledgement; otherwise Pulse uses local heuristics. When enabled, the
+  approved CLI may receive the Copilot question and the bounded task results it
+  explicitly requested.
+- Copilot conversations, including questions, answers, and cited-task
+  snapshots, are stored in the local SQLite database.
 - Cloud sync is not required for tasks, reminders, sources, or the desktop
   experience.
 
@@ -98,15 +130,17 @@ Claude / Codex sessions       Pulse desktop app / CLI
                                         v
                     pulse-service (local background service)
                                         |
-             activity capture, reminders, summaries, and JSON-RPC
+       activity capture, reminders, Copilot tools, summaries, and JSON-RPC
+                    (plus loopback WebSocket progress)
                                         |
                                         v
                     SQLite at %LOCALAPPDATA%\Pulse\pulse.db
 ```
 
 The desktop app bundles the local service and CLI pieces it needs. If the
-service is unavailable, the app can still read and update the local database
-directly.
+service is unavailable, the regular task views can still read and update the
+local database directly; Task Copilot requires the running local service for
+its bounded tool loop and progress stream.
 
 ## For developers
 

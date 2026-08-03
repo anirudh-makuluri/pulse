@@ -60,8 +60,77 @@ pub struct SummaryOut {
     pub highlights: Vec<String>,
 }
 
+/// A deliberately bounded view of a task supplied to the read-only copilot.
+/// The model receives task data, never a database connection or write tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCopilotTask {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub notes: Option<String>,
+    pub suggested_next_action: Option<String>,
+    pub project: Option<String>,
+    pub sync_outcome: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskCopilotRequest {
+    pub query: String,
+    pub tasks: Vec<TaskCopilotTask>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCopilotOut {
+    pub answer: String,
+    #[serde(default)]
+    pub cited_task_ids: Vec<String>,
+}
+
+/// An agent turn contains only the user's question and previous tool results.
+/// Task data enters the transcript only after the model explicitly requests a
+/// read-only Pulse tool.
+#[derive(Debug, Clone)]
+pub struct TaskCopilotAgentRequest {
+    pub query: String,
+    /// The service-owned registry supplies this schema. Model clients use it
+    /// verbatim, so adding a tool never requires editing prompt templates.
+    pub tools: Vec<TaskCopilotToolDefinition>,
+    pub transcript: Vec<TaskCopilotToolResult>,
+    pub remaining_tool_calls: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCopilotToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCopilotToolResult {
+    pub tool: String,
+    pub result: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TaskCopilotStep {
+    ToolCall {
+        tool: String,
+        #[serde(default)]
+        arguments: serde_json::Value,
+    },
+    Final {
+        answer: String,
+        #[serde(default)]
+        cited_task_ids: Vec<String>,
+    },
+}
+
 pub trait LlmClient: Send + Sync {
     fn backend_id(&self) -> &str;
     fn infer_tasks(&self, req: &InferRequest) -> Result<Vec<TaskCandidateOut>>;
     fn summarize_day(&self, req: &SummaryRequest) -> Result<SummaryOut>;
+    fn task_copilot_step(&self, req: &TaskCopilotAgentRequest) -> Result<TaskCopilotStep>;
 }

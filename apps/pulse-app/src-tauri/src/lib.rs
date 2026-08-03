@@ -38,6 +38,14 @@ struct SemanticSearchResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct CopilotOperation {
+    operation_id: String,
+    conversation_id: String,
+    token: String,
+    websocket_url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct ActivityTimeline {
     task: Task,
     evidence: Vec<Evidence>,
@@ -784,6 +792,53 @@ fn get_activity_timeline(id: String) -> Result<ActivityTimeline, String> {
 }
 
 #[tauri::command]
+async fn copilot_start(query: String, conversation_id: Option<String>) -> Result<CopilotOperation, String> {
+    tauri::async_runtime::spawn_blocking(move || copilot_start_blocking(query, conversation_id))
+        .await
+        .map_err(|err| format!("copilot worker failed: {err}"))?
+}
+
+fn copilot_start_blocking(query: String, conversation_id: Option<String>) -> Result<CopilotOperation, String> {
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return Err("Ask Pulse a question about your tasks.".into());
+    }
+    if query.chars().count() > 1_000 {
+        return Err("Questions must be 1000 characters or fewer.".into());
+    }
+    let paths = paths()?;
+    let cfg = load_config(&paths.config_path()).map_err(|e| e.to_string())?;
+    let mut client = try_connect(&cfg.service.pipe_name)
+        .map_err(|_| "Pulse service is unavailable; start Pulse again to use Task Copilot.".to_string())?;
+    let value = client
+        .call_raw("copilot.start", serde_json::json!({ "query": query, "conversation_id": conversation_id }))
+        .map_err(|e| e.to_string())?;
+    serde_json::from_value(value).map_err(|e| format!("decode copilot operation: {e}"))
+}
+
+#[tauri::command]
+async fn list_copilot_sessions() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(|| copilot_service_call("copilot.sessions.list", serde_json::json!({})))
+        .await
+        .map_err(|err| format!("copilot history worker failed: {err}"))?
+}
+
+#[tauri::command]
+async fn get_copilot_session(id: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || copilot_service_call("copilot.sessions.get", serde_json::json!({ "id": id })))
+        .await
+        .map_err(|err| format!("copilot history worker failed: {err}"))?
+}
+
+fn copilot_service_call(method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+    let paths = paths()?;
+    let cfg = load_config(&paths.config_path()).map_err(|e| e.to_string())?;
+    let mut client = try_connect(&cfg.service.pipe_name)
+        .map_err(|_| "Pulse service is unavailable; start Pulse again to use Copilot history.".to_string())?;
+    client.call_raw(method, params).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn semantic_search(query: String) -> Result<Vec<SemanticSearchResult>, String> {
     let paths = paths()?;
     let cfg = load_config(&paths.config_path()).map_err(|e| e.to_string())?;
@@ -1144,6 +1199,9 @@ pub fn run() {
             list_tasks,
             get_task,
             get_activity_timeline,
+            copilot_start,
+            list_copilot_sessions,
+            get_copilot_session,
             semantic_search,
             create_task,
             set_task_status,

@@ -1,4 +1,4 @@
-import { Database, House, Inbox as InboxIcon, Settings as SettingsIcon } from "lucide-react";
+import { Database, House, Inbox as InboxIcon, Settings as SettingsIcon, Sparkles } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 
 type AppSidebarProps = {
@@ -22,6 +22,10 @@ export function AppSidebar({ onSyncSessions }: AppSidebarProps) {
         <button className={view === "Inbox" ? "active" : ""} onClick={() => openInbox()}>
           <InboxIcon aria-hidden="true" />
           Inbox
+        </button>
+        <button className={view === "Copilot" ? "active" : ""} onClick={() => setView("Copilot")}>
+          <Sparkles aria-hidden="true" />
+          Task Copilot
         </button>
         <button className={view === "Sources" ? "active" : ""} onClick={() => setView("Sources")}>
           <Database aria-hidden="true" />

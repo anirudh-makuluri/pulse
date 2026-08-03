@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 use crate::error::{PulseError, Result};
 use crate::models::{
-    ActivityEvent, Artifact, CheckIn, CheckInKind, CheckInStatus, Checkpoint, Evidence, Memory,
+    ActivityEvent, Artifact, CheckIn, CheckInKind, CheckInStatus, Checkpoint, CopilotConversation,
+    CopilotMessage, Evidence, Memory,
     NewActivityEvent, NewArtifact, NewCheckIn, NewCheckpoint, NewEvidence, NewMemory, NewReminder,
     NewSession, NewSessionSyncState, NewTask, Reminder, ReminderStatus, Session, SessionSyncState,
     SourceWatermark, Summary, SyncOutboxItem, SyncOutcome, Task, TaskSource, TaskStatus,
@@ -27,6 +28,87 @@ impl Store {
 
     pub fn connection_mut(&mut self) -> &mut Connection {
         &mut self.conn
+    }
+
+    pub fn create_copilot_conversation(&self, title: &str) -> Result<CopilotConversation> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(PulseError::Validation("copilot conversation title must not be empty".into()));
+        }
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        self.conn.execute(
+            "INSERT INTO copilot_conversations (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![id.to_string(), title, now.to_rfc3339(), now.to_rfc3339()],
+        )?;
+        Ok(CopilotConversation { id, title: title.into(), created_at: now, updated_at: now })
+    }
+
+    pub fn get_copilot_conversation(&self, id: Uuid) -> Result<Option<CopilotConversation>> {
+        self.conn.query_row(
+            "SELECT id, title, created_at, updated_at FROM copilot_conversations WHERE id = ?1",
+            params![id.to_string()],
+            map_copilot_conversation,
+        ).optional().map_err(Into::into)
+    }
+
+    pub fn list_recent_copilot_conversations(&self, limit: usize) -> Result<Vec<CopilotConversation>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, title, created_at, updated_at FROM copilot_conversations ORDER BY updated_at DESC LIMIT ?1",
+        )?;
+        let rows = statement.query_map(params![limit.clamp(1, 50) as i64], map_copilot_conversation)?;
+        let mut conversations = Vec::new();
+        for row in rows {
+            conversations.push(row?);
+        }
+        Ok(conversations)
+    }
+
+    pub fn append_copilot_message(
+        &self,
+        conversation_id: Uuid,
+        role: &str,
+        content: &str,
+        backend: Option<&str>,
+        task_refs_json: &str,
+    ) -> Result<CopilotMessage> {
+        if !matches!(role, "user" | "assistant") {
+            return Err(PulseError::Validation("invalid copilot message role".into()));
+        }
+        if self.get_copilot_conversation(conversation_id)?.is_none() {
+            return Err(PulseError::Validation("copilot conversation not found".into()));
+        }
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        self.conn.execute(
+            "INSERT INTO copilot_messages (id, conversation_id, role, content, backend, task_refs_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id.to_string(), conversation_id.to_string(), role, content, backend, task_refs_json, now.to_rfc3339()],
+        )?;
+        self.conn.execute(
+            "UPDATE copilot_conversations SET updated_at = ?1 WHERE id = ?2",
+            params![now.to_rfc3339(), conversation_id.to_string()],
+        )?;
+        Ok(CopilotMessage {
+            id,
+            conversation_id,
+            role: role.into(),
+            content: content.into(),
+            backend: backend.map(str::to_owned),
+            task_refs_json: task_refs_json.into(),
+            created_at: now,
+        })
+    }
+
+    pub fn list_copilot_messages(&self, conversation_id: Uuid) -> Result<Vec<CopilotMessage>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, conversation_id, role, content, backend, task_refs_json, created_at FROM copilot_messages WHERE conversation_id = ?1 ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![conversation_id.to_string()], map_copilot_message)?;
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?);
+        }
+        Ok(messages)
     }
 
     pub fn create_task(&self, new: NewTask) -> Result<Task> {
@@ -1097,6 +1179,27 @@ fn map_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
     })
 }
 
+fn map_copilot_conversation(row: &rusqlite::Row<'_>) -> rusqlite::Result<CopilotConversation> {
+    Ok(CopilotConversation {
+        id: parse_uuid(row.get(0)?)?,
+        title: row.get(1)?,
+        created_at: parse_dt(&row.get::<_, String>(2)?)?,
+        updated_at: parse_dt(&row.get::<_, String>(3)?)?,
+    })
+}
+
+fn map_copilot_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<CopilotMessage> {
+    Ok(CopilotMessage {
+        id: parse_uuid(row.get(0)?)?,
+        conversation_id: parse_uuid(row.get(1)?)?,
+        role: row.get(2)?,
+        content: row.get(3)?,
+        backend: row.get(4)?,
+        task_refs_json: row.get(5)?,
+        created_at: parse_dt(&row.get::<_, String>(6)?)?,
+    })
+}
+
 fn map_session_sync_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSyncState> {
     Ok(SessionSyncState {
         external_id: row.get(0)?,
@@ -1368,6 +1471,30 @@ mod tests {
 
         let got = s.get_task(t.id).unwrap().unwrap();
         assert_eq!(got.id, t.id);
+    }
+
+    #[test]
+    fn persists_copilot_conversation_and_messages() {
+        let s = store();
+        let conversation = s
+            .create_copilot_conversation("What should I work on today?")
+            .unwrap();
+        s.append_copilot_message(conversation.id, "user", "What should I work on today?", None, "[]")
+            .unwrap();
+        s.append_copilot_message(
+            conversation.id,
+            "assistant",
+            "Focus on the most recently updated task.",
+            Some("heuristic"),
+            "[]",
+        )
+        .unwrap();
+
+        let recent = s.list_recent_copilot_conversations(5).unwrap();
+        assert_eq!(recent[0].id, conversation.id);
+        let messages = s.list_copilot_messages(conversation.id).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].backend.as_deref(), Some("heuristic"));
     }
 
     #[test]

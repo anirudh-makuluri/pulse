@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { SettingsSnapshot } from "@/api";
 import type { ActivityTimeline, Task, TaskStatus } from "@/types";
 
-export type View = "Home" | "Inbox" | "Sources" | "Settings";
+export type View = "Home" | "Inbox" | "Copilot" | "Sources" | "Settings";
 export type TaskFilter = TaskStatus | "All";
 
 export const TASK_FILTERS: TaskFilter[] = [

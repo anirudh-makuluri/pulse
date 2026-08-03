@@ -1,6 +1,40 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ActivityTimeline, Reminder, SemanticSearchResult, Task, TaskDetail, TaskStatus } from "./types";
 
+export interface CopilotResult {
+  answer: string;
+  tasks: Task[];
+  backend: string;
+}
+
+export interface CopilotOperation {
+  operation_id: string;
+  conversation_id: string;
+  token: string;
+  websocket_url: string;
+}
+
+export interface CopilotSession {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CopilotStoredMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  backend: string | null;
+  tasks: Task[];
+  created_at: string;
+}
+
+export interface CopilotSessionDetail {
+  session: CopilotSession;
+  messages: CopilotStoredMessage[];
+}
+
 export interface ContextEnvelope {
   active_app: string | null;
   window_title: string | null;
@@ -72,6 +106,19 @@ export async function getActivityTimeline(id: string): Promise<ActivityTimeline>
 
 export async function semanticSearch(query: string): Promise<SemanticSearchResult[]> {
   return invoke<SemanticSearchResult[]>("semantic_search", { query });
+}
+
+export async function copilotStart(query: string, conversationId: string | null): Promise<CopilotOperation> {
+  return invoke<CopilotOperation>("copilot_start", { query, conversationId });
+}
+
+export async function listCopilotSessions(): Promise<CopilotSession[]> {
+  const result = await invoke<{ sessions: CopilotSession[] }>("list_copilot_sessions");
+  return result.sessions;
+}
+
+export async function getCopilotSession(id: string): Promise<CopilotSessionDetail> {
+  return invoke<CopilotSessionDetail>("get_copilot_session", { id });
 }
 
 export async function createTask(title: string, today: boolean): Promise<Task> {

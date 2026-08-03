@@ -22,6 +22,7 @@ import { TaskDetail } from "@/components/TaskDetail";
 import { WindowBar } from "@/components/WindowBar";
 import { HomePage } from "@/components/pages/HomePage";
 import { InboxPage } from "@/components/pages/InboxPage";
+import { CopilotPage } from "@/components/pages/CopilotPage";
 import { SettingsPage } from "@/components/pages/SettingsPage";
 import { SourcesPage } from "@/components/pages/SourcesPage";
 import { useAppStore } from "@/store/useAppStore";
@@ -286,6 +287,7 @@ export default function App() {
         <main className="main">
           {view === "Inbox" ? <InboxPage /> : null}
           {view === "Home" ? <HomePage /> : null}
+          {view === "Copilot" ? <CopilotPage /> : null}
           {view === "Sources" ? <SourcesPage onRefresh={refreshSettings} /> : null}
           {view === "Settings" ? <SettingsPage onRefresh={refreshSettings} onCheckForUpdates={() => void checkForUpdates()} /> : null}
         </main>

@@ -279,6 +279,25 @@ pub struct Summary {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CopilotConversation {
+    pub id: Uuid,
+    pub title: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CopilotMessage {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub role: String,
+    pub content: String,
+    pub backend: Option<String>,
+    pub task_refs_json: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewCheckIn {
     pub task_id: Option<Uuid>,

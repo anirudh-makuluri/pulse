@@ -375,6 +375,67 @@ button { -webkit-font-smoothing: antialiased; }
 .semantic-result .task { flex: 1; }
 .semantic-empty, .semantic-search-error { padding: 4px 0; color: var(--muted); font-size: 13px; }
 .semantic-search-error { color: var(--danger); }
+.copilot-page { position: relative; min-height: 0; padding: 0; overflow: hidden; }
+.copilot-top-actions { position: absolute; z-index: 3; top: 16px; right: 20px; }
+.copilot-top-actions button, .copilot-history-heading button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 10px; background: rgba(23, 16, 13, 0.92); color: var(--muted-strong); cursor: pointer; font-size: 12px; font-weight: 700; }
+.copilot-top-actions button:hover, .copilot-history-heading button:hover:not(:disabled) { border-color: rgba(173, 207, 180, 0.45); color: var(--accent); }
+.copilot-top-actions svg, .copilot-history-heading svg { width: 14px; height: 14px; }
+.copilot-history { position: absolute; z-index: 4; top: 56px; right: 20px; width: min(350px, calc(100% - 40px)); max-height: min(470px, calc(100% - 76px)); overflow-y: auto; border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: #130d0b; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.52); }
+.copilot-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 2px 11px; border-bottom: 1px solid var(--border-soft); }
+.copilot-history-heading strong { font-size: 13px; }
+.copilot-history-heading button { padding: 5px 8px; }
+.copilot-history > p { margin: 12px 2px 4px; color: var(--muted); font-size: 12px; }
+.copilot-history-error { color: var(--danger) !important; }
+.copilot-history-session { display: block; width: 100%; margin-top: 7px; border: 1px solid transparent; border-radius: var(--radius); padding: 9px 10px; background: var(--surface); color: var(--text); cursor: pointer; text-align: left; }
+.copilot-history-session:hover { border-color: rgba(173, 207, 180, 0.35); background: var(--surface-high); }
+.copilot-history-session strong, .copilot-history-session small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copilot-history-session strong { font-size: 13px; }
+.copilot-history-session small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.copilot-empty-state { display: grid; place-items: center; overflow: auto; padding: 28px; }
+.copilot-welcome { width: min(760px, 100%); margin: auto; transform: translateY(-4vh); }
+.copilot-welcome-copy { margin: 0 auto 22px; text-align: center; }
+.copilot-welcome-copy .eyebrow { margin-bottom: 8px; }
+.copilot-welcome-copy h1 { margin: 0; font-size: clamp(25px, 3vw, 34px); letter-spacing: -0.035em; line-height: 1.15; }
+.copilot-welcome-copy p { max-width: 560px; margin: 12px auto 0; color: var(--muted); }
+.copilot-form { width: 100%; border: 1px solid var(--border); border-radius: 18px; padding: 8px; background: linear-gradient(145deg, #1b120f, #15100d); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24); }
+.copilot-input-row { display: flex; gap: 9px; }
+.copilot-input-row input { min-width: 0; flex: 1; border: 0; border-radius: 12px; outline: none; padding: 12px 13px; background: transparent; color: var(--text); }
+.copilot-input-row input:focus { box-shadow: 0 0 0 2px rgba(173, 207, 180, 0.12); }
+.copilot-input-row button { min-width: 68px; border: 1px solid var(--button-primary-border); border-radius: 12px; padding: 9px 14px; background: var(--button-primary); color: var(--button-primary-text); cursor: pointer; font-weight: 700; }
+.copilot-input-row button:hover:not(:disabled) { background: var(--button-primary-hover); }
+.copilot-input-row button:disabled { cursor: progress; opacity: 0.65; }
+.copilot-composer-note { display: flex; align-items: center; gap: 5px; margin: 5px 7px 0; color: var(--muted); font-size: 11px; }
+.copilot-composer-note svg { width: 12px; height: 12px; color: var(--accent); }
+.copilot-empty { margin: 18px auto 0; padding: 4px 0; color: var(--muted); }
+.copilot-empty p { margin: 0 0 10px; }
+.copilot-suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.copilot-suggestions button { border: 1px solid var(--border); border-radius: 999px; padding: 7px 10px; background: var(--surface); color: var(--muted-strong); cursor: pointer; }
+.copilot-suggestions button:hover { border-color: rgba(173, 207, 180, 0.45); color: var(--accent); }
+.copilot-chat-state { display: flex; flex-direction: column; }
+.copilot-transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 28px max(28px, calc((100% - 760px) / 2)); }
+.copilot-message + .copilot-message { margin-top: 28px; }
+.copilot-user-message { width: fit-content; max-width: min(80%, 600px); margin: 0 0 14px auto; border-radius: 16px 16px 4px 16px; padding: 11px 14px; background: var(--accent-container); color: #f1f6ee; white-space: pre-wrap; }
+.copilot-answer { border: 1px solid rgba(173, 207, 180, 0.25); border-radius: 14px; padding: 20px; background: rgba(173, 207, 180, 0.05); }
+.copilot-answer-heading { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
+.copilot-answer-heading span:first-child { color: var(--accent); font-weight: 700; }
+.copilot-answer p { margin: 12px 0 0; white-space: pre-wrap; line-height: 1.6; }
+.copilot-thinking { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.copilot-thinking::before { width: 8px; height: 8px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; content: ""; animation: copilot-spin 800ms linear infinite; }
+.copilot-progress { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; }
+.copilot-progress > div { display: flex; align-items: center; gap: 8px; }
+.copilot-progress > div::before { width: 7px; height: 7px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; content: ""; animation: copilot-spin 800ms linear infinite; }
+.copilot-progress > div:not(:last-child)::before { animation: none; border-color: rgba(173, 207, 180, 0.7); }
+@keyframes copilot-spin { to { transform: rotate(360deg); } }
+.copilot-citations { margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border); }
+.copilot-citations h2 { margin: 0 0 8px; color: var(--muted-strong); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.copilot-citations button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 16px; margin-top: 7px; border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 10px 11px; background: var(--surface-lowest); color: var(--text); cursor: pointer; text-align: left; }
+.copilot-citations button:hover { border-color: rgba(173, 207, 180, 0.45); background: var(--surface); }
+.copilot-citations button span { min-width: 0; }
+.copilot-citations strong, .copilot-citations small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copilot-citations small { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.copilot-citations svg { flex: 0 0 auto; width: 16px; height: 16px; color: var(--accent); }
+.copilot-no-citations { color: var(--muted); font-size: 13px; }
+.copilot-composer-dock { flex: 0 0 auto; padding: 16px max(28px, calc((100% - 760px) / 2)) 20px; border-top: 1px solid var(--border-soft); background: linear-gradient(180deg, rgba(13, 8, 7, 0.84), var(--main-content) 26%); }
 .settings { display: flex; flex-direction: column; gap: 18px; }
 .settings-card { min-height: 0; }
 .desktop-pet-setting { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
@@ -442,4 +503,4 @@ button { -webkit-font-smoothing: antialiased; }
 .pet-message { padding: 9px 11px; border: 1px solid rgba(0, 0, 0, .38); border-radius: var(--radius); background: rgba(23, 16, 13, .96); color: var(--muted-strong); font-size: 12px; overflow-wrap: anywhere; }
 
 @media (max-width: 980px) { .app { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr) auto; }.detail { border-left: none; border-top: 1px solid var(--border-soft); max-height: 40vh; }.sidebar { padding: 12px 14px; gap: 10px; }.nav { flex-direction: row; flex-wrap: wrap; }.nav button { padding: 7px 9px; }.sidebar-footer { display: none; } }
-@media (max-width: 560px) { .window-context { display: none; }.window-control { width: 40px; }.toolbar { padding: 14px 16px; }.toolbar button { padding: 9px 10px; }.list { padding: 12px; } }
+@media (max-width: 560px) { .window-context { display: none; }.window-control { width: 40px; }.toolbar { padding: 14px 16px; }.toolbar button { padding: 9px 10px; }.list { padding: 12px; }.section-page { padding: 18px; }.copilot-input-row { flex-direction: column; }.copilot-input-row button { width: 100%; } }

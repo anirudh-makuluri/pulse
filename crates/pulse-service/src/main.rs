@@ -1,9 +1,10 @@
 //! Pulse background service: named-pipe JSON-RPC server + source inference poller.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -15,11 +16,15 @@ use pulse_core::ipc::rpc::{RpcCode, RpcErrorObject, RpcHandler};
 use pulse_core::{
     apply_checkin_answer, export_history, load_config, open_db, parse_answer_input, write_config,
     Config, ExportFormat, NewCheckpoint, NewSession, NewTask, PulseError, PulsePaths, Store,
-    SyncOutcome, TaskStatus, TaskUpdate,
+    SyncOutcome, Task, TaskStatus, TaskUpdate,
 };
-use pulse_llm::{llm_status, HuggingFaceEmbeddingClient};
-use pulse_service::{pipeline, sync};
+use pulse_llm::{
+    llm_status, resolve_llm_client, HuggingFaceEmbeddingClient, TaskCopilotAgentRequest,
+    TaskCopilotStep, TaskCopilotToolResult,
+};
+use pulse_service::{copilot::CopilotToolRegistry, pipeline, sync};
 use serde_json::{json, Value};
+use tungstenite::{accept, Message};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
@@ -38,6 +43,127 @@ enum Commands {
         #[arg(long)]
         quiet: bool,
     },
+}
+
+/// A local, ephemeral event stream for one copilot request. The listener binds
+/// only to loopback and subscriptions require the per-operation token returned
+/// by `copilot.start`.
+#[derive(Default)]
+struct CopilotProgressBroker {
+    operations: Mutex<HashMap<Uuid, CopilotOperation>>,
+}
+
+struct CopilotOperation {
+    token: String,
+    events: Vec<Value>,
+    complete: bool,
+    subscribers: Vec<mpsc::Sender<Value>>,
+}
+
+impl CopilotProgressBroker {
+    fn create(&self) -> (Uuid, String) {
+        let id = Uuid::new_v4();
+        let token = Uuid::new_v4().to_string();
+        let mut operations = self.operations.lock().expect("copilot progress lock");
+        // Completed operations are only useful long enough for the client to
+        // finish connecting. Keep the broker bounded during a long-lived daemon.
+        if operations.len() > 100 {
+            operations.retain(|_, operation| !operation.complete);
+        }
+        operations.insert(
+            id,
+            CopilotOperation {
+                token: token.clone(),
+                events: Vec::new(),
+                complete: false,
+                subscribers: Vec::new(),
+            },
+        );
+        (id, token)
+    }
+
+    fn publish(&self, id: Uuid, event: Value, complete: bool) {
+        let Ok(mut operations) = self.operations.lock() else {
+            return;
+        };
+        let Some(operation) = operations.get_mut(&id) else {
+            return;
+        };
+        operation.events.push(event.clone());
+        operation.events = operation.events.drain(operation.events.len().saturating_sub(50)..).collect();
+        operation.complete |= complete;
+        operation.subscribers.retain(|subscriber| subscriber.send(event.clone()).is_ok());
+        if operation.complete {
+            operation.subscribers.clear();
+        }
+    }
+
+    fn subscribe(&self, id: Uuid, token: &str) -> Result<(Vec<Value>, mpsc::Receiver<Value>, bool), String> {
+        let (sender, receiver) = mpsc::channel();
+        let mut operations = self.operations.lock().map_err(|_| "copilot progress lock failed")?;
+        let operation = operations.get_mut(&id).ok_or("copilot operation was not found")?;
+        if operation.token != token {
+            return Err("copilot operation token is invalid".into());
+        }
+        let complete = operation.complete;
+        let events = operation.events.clone();
+        if !complete {
+            operation.subscribers.push(sender);
+        }
+        Ok((events, receiver, complete))
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct CopilotSocketSubscription {
+    operation_id: Uuid,
+    token: String,
+}
+
+fn start_copilot_progress_server(broker: Arc<CopilotProgressBroker>) -> Result<u16, Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let broker = Arc::clone(&broker);
+            thread::spawn(move || serve_copilot_progress_socket(stream, broker));
+        }
+    });
+    Ok(port)
+}
+
+fn serve_copilot_progress_socket(stream: TcpStream, broker: Arc<CopilotProgressBroker>) {
+    let Ok(mut socket) = accept(stream) else {
+        return;
+    };
+    let subscription = match socket.read() {
+        Ok(Message::Text(text)) => serde_json::from_str::<CopilotSocketSubscription>(&text).ok(),
+        _ => None,
+    };
+    let Some(subscription) = subscription else {
+        let _ = socket.close(None);
+        return;
+    };
+    let Ok((events, receiver, complete)) = broker.subscribe(subscription.operation_id, &subscription.token) else {
+        let _ = socket.close(None);
+        return;
+    };
+    for event in events {
+        if socket.send(Message::Text(event.to_string())).is_err() {
+            return;
+        }
+    }
+    if complete {
+        let _ = socket.close(None);
+        return;
+    }
+    while let Ok(event) = receiver.recv() {
+        let terminal = matches!(event.get("event").and_then(Value::as_str), Some("final") | Some("error"));
+        if socket.send(Message::Text(event.to_string())).is_err() || terminal {
+            let _ = socket.close(None);
+            return;
+        }
+    }
 }
 
 fn main() {
@@ -68,12 +194,16 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
     let store = Arc::new(Mutex::new(Store::new(conn)));
     let config = Arc::new(Mutex::new(config));
 
+    let copilot_progress = Arc::new(CopilotProgressBroker::default());
+    let copilot_ws_port = start_copilot_progress_server(Arc::clone(&copilot_progress))?;
     let state = Arc::new(ServiceState {
         paths: paths.clone(),
         store: Arc::clone(&store),
         config: Arc::clone(&config),
         session_sync_active: Arc::new(AtomicBool::new(false)),
         semantic_search_embeddings: Mutex::new(None),
+        copilot_progress,
+        copilot_ws_port,
         shutdown: Arc::new(AtomicBool::new(false)),
         started_at: Utc::now(),
         pid: current_pid(),
@@ -110,6 +240,7 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
             pipe_name, state.pid
         );
         eprintln!("inference poller active (enable sources via `pulse sources enable`)");
+        eprintln!("copilot progress available on local WebSocket port {copilot_ws_port}");
         eprintln!("stop with: pulse service stop");
     }
 
@@ -272,9 +403,151 @@ struct ServiceState {
     config: Arc<Mutex<Config>>,
     session_sync_active: Arc<AtomicBool>,
     semantic_search_embeddings: Mutex<Option<HuggingFaceEmbeddingClient>>,
+    copilot_progress: Arc<CopilotProgressBroker>,
+    copilot_ws_port: u16,
     shutdown: Arc<AtomicBool>,
     started_at: chrono::DateTime<Utc>,
     pid: u32,
+}
+
+fn publish_copilot_event(
+    broker: &CopilotProgressBroker,
+    operation_id: Uuid,
+    event: &str,
+    message: impl Into<String>,
+    complete: bool,
+) {
+    broker.publish(
+        operation_id,
+        json!({ "event": event, "message": message.into() }),
+        complete,
+    );
+}
+
+fn run_copilot_agent(
+    operation_id: Uuid,
+    conversation_id: Uuid,
+    query: String,
+    cfg: Config,
+    store: Arc<Mutex<Store>>,
+    broker: Arc<CopilotProgressBroker>,
+    tools: CopilotToolRegistry,
+) {
+    publish_copilot_event(&broker, operation_id, "status", "Planning the best task lookup…", false);
+    let client = resolve_llm_client(&cfg.llm, &cfg.privacy);
+    let backend = client.backend_id().to_string();
+    let mut transcript = Vec::new();
+    let mut available_tasks = HashMap::new();
+    let mut tool_calls = 0u8;
+    let tool_definitions = tools.definitions();
+
+    loop {
+        let step = client.task_copilot_step(&TaskCopilotAgentRequest {
+            query: query.clone(),
+            tools: tool_definitions.clone(),
+            transcript: transcript.clone(),
+            remaining_tool_calls: 2u8.saturating_sub(tool_calls),
+        });
+        let step = match step {
+            Ok(step) => step,
+            Err(error) => {
+                persist_copilot_reply(&store, conversation_id, &format!("Copilot could not continue: {error}"), Some(&backend), &[]);
+                publish_copilot_event(&broker, operation_id, "error", format!("Copilot could not continue: {error}"), true);
+                return;
+            }
+        };
+        match step {
+            TaskCopilotStep::Final { answer, cited_task_ids } => {
+                let mut seen = HashSet::new();
+                let tasks = cited_task_ids.into_iter()
+                    .filter(|id| seen.insert(id.clone()))
+                    .filter_map(|id| available_tasks.get(&id).cloned())
+                    .collect::<Vec<_>>();
+                persist_copilot_reply(&store, conversation_id, &answer, Some(&backend), &tasks);
+                broker.publish(operation_id, json!({
+                    "event": "final",
+                    "result": { "answer": answer, "tasks": tasks, "backend": backend },
+                }), true);
+                return;
+            }
+            TaskCopilotStep::ToolCall { tool, arguments } if tool_calls < 2 => {
+                tool_calls += 1;
+                let tool_label = tools.progress_label(&tool);
+                publish_copilot_event(&broker, operation_id, "tool_call", tool_label, false);
+                let execution = match store.lock() {
+                    Ok(store) => tools.execute(&store, &tool, &arguments),
+                    Err(_) => Err("task store is unavailable".into()),
+                };
+                let (payload, tasks, progress) = match execution {
+                    Ok(execution) => {
+                        let count = execution.tasks.len();
+                        (execution.payload, execution.tasks, format!("{tool_label} finished with {count} task{}.", if count == 1 { "" } else { "s" }))
+                    }
+                    Err(error) => (json!({ "error": error }), Vec::new(), format!("{tool_label} could not complete.")),
+                };
+                for task in &tasks {
+                    available_tasks.insert(task.id.to_string(), task.clone());
+                }
+                broker.publish(operation_id, json!({ "event": "tool_result", "tool": tool, "message": progress }), false);
+                transcript.push(TaskCopilotToolResult { tool, result: payload });
+                publish_copilot_event(&broker, operation_id, "status", "Reviewing the retrieved task context…", false);
+            }
+            TaskCopilotStep::ToolCall { .. } => {
+                let tasks = available_tasks.into_values().take(3).collect::<Vec<_>>();
+                let answer: String = if tasks.is_empty() {
+                    "I used the available read-only lookups but did not find enough task context to answer that.".into()
+                } else {
+                    "I completed the two available read-only lookups. Here are the tasks that support the answer.".into()
+                };
+                persist_copilot_reply(&store, conversation_id, &answer, Some(&backend), &tasks);
+                broker.publish(operation_id, json!({
+                    "event": "final",
+                    "result": { "answer": answer, "tasks": tasks, "backend": backend },
+                }), true);
+                return;
+            }
+        }
+    }
+}
+
+fn persist_copilot_reply(
+    store: &Arc<Mutex<Store>>,
+    conversation_id: Uuid,
+    content: &str,
+    backend: Option<&str>,
+    tasks: &[Task],
+) {
+    let task_refs_json = serde_json::to_string(tasks).unwrap_or_else(|_| "[]".into());
+    if let Ok(store) = store.lock() {
+        let _ = store.append_copilot_message(
+            conversation_id,
+            "assistant",
+            content,
+            backend,
+            &task_refs_json,
+        );
+    }
+}
+
+fn copilot_history_message(message: pulse_core::CopilotMessage) -> Value {
+    let tasks: Vec<Task> = serde_json::from_str(&message.task_refs_json).unwrap_or_default();
+    json!({
+        "id": message.id,
+        "role": message.role,
+        "content": message.content,
+        "backend": message.backend,
+        "tasks": tasks,
+        "created_at": message.created_at,
+    })
+}
+
+fn copilot_conversation_title(query: &str) -> String {
+    let trimmed = query.trim();
+    if trimmed.chars().count() <= 80 {
+        trimmed.into()
+    } else {
+        format!("{}…", trimmed.chars().take(79).collect::<String>())
+    }
 }
 
 impl RpcHandler for ServiceState {
@@ -282,7 +555,10 @@ impl RpcHandler for ServiceState {
         // Session analysis can take minutes while the configured CLI runs. Do
         // not let normal UI requests wait behind its database lock: callers
         // get a quick, retryable response instead of appearing hung.
-        if method != "inference.sync_recent" && self.session_sync_active.load(Ordering::SeqCst) {
+        if method != "inference.sync_recent"
+            && method != "copilot.start"
+            && self.session_sync_active.load(Ordering::SeqCst)
+        {
             return Err(RpcErrorObject::new(
                 RpcCode::ServiceBusy,
                 "Session sync is in progress; please try again shortly.",
@@ -610,6 +886,66 @@ impl RpcHandler for ServiceState {
                 let task = store.resolve_task(&id).map_err(map_store_err)?;
                 let evidence = store.list_evidence(task.id).map_err(map_store_err)?;
                 Ok(json!({ "task": task, "evidence": evidence }))
+            }
+            "copilot.start" => {
+                let query = param_str(&params, "query")?;
+                if query.trim().is_empty() {
+                    return Err(RpcErrorObject::new(
+                        RpcCode::InvalidParams,
+                        "query must not be empty",
+                    ));
+                }
+                if query.chars().count() > 1_000 {
+                    return Err(RpcErrorObject::new(
+                        RpcCode::InvalidParams,
+                        "query must be 1000 characters or fewer",
+                    ));
+                }
+                let conversation_id = {
+                    let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                    let conversation = match optional_str(&params, "conversation_id") {
+                        Some(id) => {
+                            let id = Uuid::parse_str(&id).map_err(|_| RpcErrorObject::new(RpcCode::InvalidParams, "invalid conversation id"))?;
+                            store.get_copilot_conversation(id).map_err(map_store_err)?
+                                .ok_or_else(|| RpcErrorObject::new(RpcCode::InvalidParams, "copilot conversation not found"))?
+                        }
+                        None => store.create_copilot_conversation(&copilot_conversation_title(&query)).map_err(map_store_err)?,
+                    };
+                    store.append_copilot_message(conversation.id, "user", &query, None, "[]").map_err(map_store_err)?;
+                    conversation.id
+                };
+                let cfg = self
+                    .config
+                    .lock()
+                    .map_err(|_| internal("config lock"))?
+                    .clone();
+                let (operation_id, token) = self.copilot_progress.create();
+                let broker = Arc::clone(&self.copilot_progress);
+                let store = Arc::clone(&self.store);
+                let tools = CopilotToolRegistry::read_only_tasks();
+                thread::spawn(move || run_copilot_agent(operation_id, conversation_id, query, cfg, store, broker, tools));
+                Ok(json!({
+                    "operation_id": operation_id,
+                    "conversation_id": conversation_id,
+                    "token": token,
+                    "websocket_url": format!("ws://127.0.0.1:{}", self.copilot_ws_port),
+                }))
+            }
+            "copilot.sessions.list" => {
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let sessions = store.list_recent_copilot_conversations(5).map_err(map_store_err)?;
+                Ok(json!({ "sessions": sessions }))
+            }
+            "copilot.sessions.get" => {
+                let id = param_str(&params, "id")?;
+                let id = Uuid::parse_str(&id)
+                    .map_err(|_| RpcErrorObject::new(RpcCode::InvalidParams, "invalid conversation id"))?;
+                let store = self.store.lock().map_err(|_| internal("store lock"))?;
+                let session = store.get_copilot_conversation(id).map_err(map_store_err)?
+                    .ok_or_else(|| RpcErrorObject::new(RpcCode::InvalidParams, "copilot conversation not found"))?;
+                let messages = store.list_copilot_messages(id).map_err(map_store_err)?
+                    .into_iter().map(copilot_history_message).collect::<Vec<_>>();
+                Ok(json!({ "session": session, "messages": messages }))
             }
             "activities.semantic_search" => {
                 let query = param_str(&params, "query")?;

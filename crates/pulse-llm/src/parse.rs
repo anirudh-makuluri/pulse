@@ -1,6 +1,6 @@
 //! Parse model stdout into structured candidates / summaries.
 
-use crate::types::{LlmError, Result, SummaryOut, TaskCandidateOut};
+use crate::types::{LlmError, Result, SummaryOut, TaskCandidateOut, TaskCopilotOut, TaskCopilotStep};
 
 #[derive(serde::Deserialize)]
 struct CandidatesWrapper {
@@ -12,6 +12,13 @@ struct SummaryWrapper {
     text: String,
     #[serde(default)]
     highlights: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct TaskCopilotWrapper {
+    answer: String,
+    #[serde(default)]
+    cited_task_ids: Vec<String>,
 }
 
 /// Extract first JSON object from text (strips fences if present).
@@ -92,6 +99,37 @@ pub fn parse_summary(raw: &str) -> Result<SummaryOut> {
     })
 }
 
+pub fn parse_task_copilot(raw: &str) -> Result<TaskCopilotOut> {
+    let json = extract_json_object(raw)?;
+    let output: TaskCopilotWrapper = serde_json::from_str(&json)
+        .map_err(|e| LlmError::Parse(format!("invalid task copilot response: {e}")))?;
+    let answer = output.answer.trim().to_string();
+    if answer.is_empty() {
+        return Err(LlmError::Parse(
+            "task copilot response has no answer".into(),
+        ));
+    }
+    Ok(TaskCopilotOut {
+        answer,
+        cited_task_ids: output.cited_task_ids,
+    })
+}
+
+pub fn parse_task_copilot_step(raw: &str) -> Result<TaskCopilotStep> {
+    let json = extract_json_object(raw)?;
+    let step: TaskCopilotStep = serde_json::from_str(&json)
+        .map_err(|e| LlmError::Parse(format!("invalid task copilot step: {e}")))?;
+    match &step {
+        TaskCopilotStep::ToolCall { tool, .. } if tool.trim().is_empty() => {
+            Err(LlmError::Parse("task copilot tool call has no tool name".into()))
+        }
+        TaskCopilotStep::Final { answer, .. } if answer.trim().is_empty() => {
+            Err(LlmError::Parse("task copilot final response has no answer".into()))
+        }
+        _ => Ok(step),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +142,30 @@ mod tests {
         let c = parse_candidates(raw).unwrap();
         assert_eq!(c.len(), 1);
         assert!(c[0].title.contains("export"));
+    }
+
+    #[test]
+    fn parses_grounded_task_copilot_response() {
+        let answer = parse_task_copilot(
+            r#"{"answer":"Focus on the migration task.","cited_task_ids":["task-123"]}"#,
+        )
+        .unwrap();
+        assert_eq!(answer.answer, "Focus on the migration task.");
+        assert_eq!(answer.cited_task_ids, vec!["task-123"]);
+    }
+
+    #[test]
+    fn parses_task_copilot_tool_call() {
+        let step = parse_task_copilot_step(
+            r#"{"type":"tool_call","tool":"list_tasks","arguments":{"status":"Today","limit":5}}"#,
+        )
+        .unwrap();
+        match step {
+            TaskCopilotStep::ToolCall { tool, arguments } => {
+                assert_eq!(tool, "list_tasks");
+                assert_eq!(arguments["status"], "Today");
+            }
+            TaskCopilotStep::Final { .. } => panic!("expected a tool call"),
+        }
     }
 }

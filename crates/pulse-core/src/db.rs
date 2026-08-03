@@ -5,13 +5,14 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{PulseError, Result};
 
 /// Highest migration version this binary knows how to apply.
-pub const LATEST_SCHEMA_VERSION: i64 = 5;
+pub const LATEST_SCHEMA_VERSION: i64 = 6;
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../migrations/002_activity_timeline.sql");
 const MIGRATION_003: &str = include_str!("../migrations/003_sync_outbox.sql");
 const MIGRATION_004: &str = include_str!("../migrations/004_sync_outcome.sql");
 const MIGRATION_005: &str = include_str!("../migrations/005_session_sync_state.sql");
+const MIGRATION_006: &str = include_str!("../migrations/006_copilot_conversations.sql");
 
 /// Open (or create) the SQLite database, enable pragmas, apply migrations.
 pub fn open(path: &Path) -> Result<Connection> {
@@ -94,6 +95,15 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
         tx.commit()?;
     }
+    if current < 6 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_006)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
+            [6i64],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -170,6 +180,8 @@ mod tests {
             "artifacts",
             "sync_outbox",
             "session_sync_state",
+            "copilot_conversations",
+            "copilot_messages",
         ] {
             let exists: bool = conn
                 .query_row(
