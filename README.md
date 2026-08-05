@@ -146,6 +146,67 @@ service is unavailable, the regular task views can still read and update the
 local database directly; Task Copilot requires the running local service for
 its bounded tool loop and progress stream.
 
+## CockroachDB × AWS agentic memory
+
+Pulse is local-first by default, with an opt-in durable activity-memory layer
+for cross-session continuity. It stores approved structured activities,
+checkpoints, memories, reminders, and embeddings in CockroachDB; raw agent
+transcripts and local files are not synced automatically.
+
+```text
+Pulse service
+  | approved structured memory + local MiniLM embedding
+  v
+SQLite sync outbox --> API Gateway + AWS Lambda --> CockroachDB pulse_* tables
+                                |                    |
+                                v                    v
+                           private S3 archive    VECTOR(384) retrieval
+                                                     |
+                                                     v
+                                         Copilot / Inbox semantic search
+```
+
+### CockroachDB tools
+
+- **Distributed Vector Indexing:** Pulse generates a local 384-dimensional
+  MiniLM embedding for approved activity memory. Lambda stores it in
+  CockroachDB's `VECTOR(384)` column, and CockroachDB performs cosine
+  nearest-neighbor retrieval.
+- **CockroachDB Cloud Managed MCP Server:** a separately authenticated,
+  read-only MCP connection lets an approved coding agent inspect the live Pulse
+  activity-memory schema and run `SELECT` queries. See the
+  [safe setup and verification guide](docs/cockroach-managed-mcp.md).
+
+When cloud sync is enabled, Task Copilot receives a read-only
+`search_cloud_memory` tool for questions about prior work, decisions,
+checkpoints, or continuity context. That tool generates the query embedding
+locally, calls the authenticated Lambda search endpoint, and gives the retrieved
+CockroachDB memory to the Copilot as reference context. The sync token and any
+CockroachDB credential remain in the service/AWS path and are never sent to the
+renderer or model.
+
+### AWS services
+
+- **AWS Lambda + API Gateway:** authenticate sync and semantic-search requests,
+  validate embeddings, and idempotently write durable activity memory.
+- **Amazon S3:** privately and versionedly archives explicitly approved
+  checkpoint payloads and artifacts through short-lived upload URLs.
+
+### Run the memory demo
+
+1. Follow [CockroachDB memory setup](docs/cloud-memory-setup.md) and the
+   [AWS deployment guide](infra/aws/README.md), then enable `[sync]` in
+   `%LOCALAPPDATA%\Pulse\config.toml`.
+2. Create or sync an activity with a distinctive decision or checkpoint; wait
+   for the sync worker to deliver it.
+3. In Task Copilot, ask, for example: **“What do you remember about the
+   authentication refactor decision?”** Copilot uses the read-only cloud-memory
+   tool and identifies the returned CockroachDB context in its response.
+4. Configure the Managed MCP server using
+   [the MCP guide](docs/cockroach-managed-mcp.md) and ask it to inspect the same
+   `pulse_activities` or `pulse_embeddings` record. Its OAuth consent remains
+   read-only.
+
 ## For developers
 
 ### Requirements
