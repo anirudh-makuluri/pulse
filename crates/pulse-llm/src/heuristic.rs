@@ -98,15 +98,45 @@ impl LlmClient for HeuristicClient {
     fn task_copilot_step(&self, req: &TaskCopilotAgentRequest) -> Result<TaskCopilotStep> {
         if req.transcript.is_empty() && req.remaining_tool_calls > 0 {
             let query = req.query.to_ascii_lowercase();
+            let cloud_memory_available = req
+                .tools
+                .iter()
+                .any(|tool| tool.name == "search_cloud_memory");
+            let asks_for_prior_context = [
+                "remember",
+                "memory",
+                "previous",
+                "prior work",
+                "last time",
+                "what happened",
+                "context",
+                "decision",
+                "checkpoint",
+            ]
+            .iter()
+            .any(|phrase| query.contains(phrase));
+            if cloud_memory_available && asks_for_prior_context {
+                return Ok(TaskCopilotStep::ToolCall {
+                    tool: "search_cloud_memory".into(),
+                    arguments: serde_json::json!({ "query": req.query, "limit": 10 }),
+                });
+            }
             let status = if query.contains("blocked") || query.contains("waiting") {
                 Some("Waiting")
-            } else if query.contains("today") || query.contains("work on") || query.contains("focus") {
+            } else if query.contains("today")
+                || query.contains("work on")
+                || query.contains("focus")
+            {
                 Some("Today")
             } else {
                 None
             };
             return Ok(TaskCopilotStep::ToolCall {
-                tool: if status.is_some() { "list_tasks".into() } else { "search_tasks".into() },
+                tool: if status.is_some() {
+                    "list_tasks".into()
+                } else {
+                    "search_tasks".into()
+                },
                 arguments: if let Some(status) = status {
                     serde_json::json!({ "status": status, "limit": 10 })
                 } else {
@@ -115,8 +145,44 @@ impl LlmClient for HeuristicClient {
             });
         }
 
-        let tasks = req.transcript.iter().rev().find_map(tasks_from_tool_result).unwrap_or_default();
-        let answer = heuristic_task_answer(&TaskCopilotRequest { query: req.query.clone(), tasks });
+        let tasks = req
+            .transcript
+            .iter()
+            .rev()
+            .find_map(tasks_from_tool_result)
+            .unwrap_or_default();
+        let answer = heuristic_task_answer(&TaskCopilotRequest {
+            query: req.query.clone(),
+            tasks,
+        });
+        let memory_summary = req
+            .transcript
+            .iter()
+            .rev()
+            .find(|result| result.tool == "search_cloud_memory")
+            .and_then(|result| result.result.get("memories"))
+            .and_then(serde_json::Value::as_array)
+            .map(|memories| {
+                memories
+                    .iter()
+                    .take(3)
+                    .filter_map(|memory| memory.get("content").and_then(serde_json::Value::as_str))
+                    .map(|content| format!("- {}", content.chars().take(500).collect::<String>()))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|memories| !memories.is_empty());
+        let answer = if let Some(memories) = memory_summary {
+            TaskCopilotOut {
+                answer: format!(
+                    "I found this related long-term activity memory in CockroachDB:\n{}\n\n{}",
+                    memories.join("\n"),
+                    answer.answer
+                ),
+                cited_task_ids: answer.cited_task_ids,
+            }
+        } else {
+            answer
+        };
         Ok(TaskCopilotStep::Final {
             answer: answer.answer,
             cited_task_ids: answer.cited_task_ids,
@@ -126,9 +192,18 @@ impl LlmClient for HeuristicClient {
 
 fn tasks_from_tool_result(result: &TaskCopilotToolResult) -> Option<Vec<TaskCopilotTask>> {
     if result.tool == "get_task" {
-        return result.result.get("task").cloned().and_then(|task| serde_json::from_value(task).ok()).map(|task| vec![task]);
+        return result
+            .result
+            .get("task")
+            .cloned()
+            .and_then(|task| serde_json::from_value(task).ok())
+            .map(|task| vec![task]);
     }
-    result.result.get("tasks").cloned().and_then(|tasks| serde_json::from_value(tasks).ok())
+    result
+        .result
+        .get("tasks")
+        .cloned()
+        .and_then(|tasks| serde_json::from_value(tasks).ok())
 }
 
 fn heuristic_task_answer(req: &TaskCopilotRequest) -> TaskCopilotOut {
