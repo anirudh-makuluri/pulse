@@ -258,6 +258,7 @@ h1 span {
 }
 
 .pulse-mockup {
+  position: relative;
   overflow: hidden;
   border: 1px solid #2a211d;
   border-radius: 0.7rem;
@@ -372,7 +373,166 @@ h1 span {
   color: #adcfb4;
 }
 
+.mock-demo-main {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  background: #0d0807;
+}
+
+.mock-main,
+.mock-copilot-screen {
+  position: absolute;
+  inset: 0;
+}
+
 .mock-main { padding: 1.45rem 2rem 2rem; background: #0d0807; }
+
+.mock-home-screen {
+  animation: mock-home-screen 24s linear infinite;
+}
+
+.mock-copilot-screen {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 2rem;
+  background: #0d0807;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: mock-copilot-screen 24s linear infinite;
+}
+
+.mock-copilot-top {
+  position: absolute;
+  top: 1rem;
+  right: 1.25rem;
+}
+
+.mock-copilot-top button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid #2a211d;
+  border-radius: 0.45rem;
+  padding: 0.38rem 0.55rem;
+  background: rgba(23, 16, 13, 0.92);
+  color: #c2c8c0;
+  font: inherit;
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+
+.mock-copilot-top svg { width: 0.76rem; height: 0.76rem; }
+
+.mock-copilot-welcome {
+  width: min(36rem, 88%);
+  transform: translateY(-1rem);
+}
+
+.mock-copilot-welcome-copy { margin-bottom: 1.1rem; text-align: center; }
+
+.mock-copilot-welcome-copy p {
+  margin: 0 0 0.4rem;
+  color: #adcfb4;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.mock-copilot-welcome-copy h2 {
+  margin: 0;
+  color: #eae1dd;
+  font-size: clamp(1.05rem, 2vw, 1.45rem);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+
+.mock-copilot-welcome-copy span { display: block; margin-top: 0.5rem; color: #a9ada5; font-size: 0.68rem; }
+
+.mock-copilot-composer {
+  display: flex;
+  gap: 0.45rem;
+  border: 1px solid #2a211d;
+  border-radius: 0.75rem;
+  padding: 0.4rem;
+  background: linear-gradient(145deg, #1b120f, #15100d);
+  box-shadow: 0 0.75rem 1.9rem rgba(0, 0, 0, 0.24);
+}
+
+.mock-copilot-composer > div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  overflow: hidden;
+  padding: 0.45rem 0.55rem;
+  color: #eae1dd;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.mock-typed-question {
+  display: inline-block;
+  max-width: 0;
+  overflow: hidden;
+  animation: mock-type-question 24s steps(28, end) infinite;
+}
+
+.mock-copilot-composer > div > i {
+  width: 1px;
+  height: 0.9rem;
+  margin-left: 2px;
+  background: #adcfb4;
+  animation: mock-caret 850ms steps(1, end) infinite;
+}
+
+.mock-copilot-composer button {
+  display: grid;
+  width: 1.9rem;
+  height: 1.9rem;
+  place-items: center;
+  border: 1px solid #466550;
+  border-radius: 0.55rem;
+  background: #203827;
+  color: #f1eee8;
+}
+
+.mock-copilot-composer svg { width: 0.78rem; height: 0.78rem; }
+
+.mock-copilot-answer {
+  margin-top: 1rem;
+  opacity: 0;
+  transform: translateY(0.55rem);
+  animation: mock-copilot-answer 24s ease-out infinite;
+}
+
+.mock-copilot-user-message {
+  width: fit-content;
+  margin: 0 0 0.6rem auto;
+  border-radius: 0.7rem 0.7rem 0.2rem;
+  padding: 0.48rem 0.65rem;
+  background: #2d4b37;
+  color: #f1f6ee;
+  font-size: 0.64rem;
+}
+
+.mock-copilot-answer-card {
+  border: 1px solid rgba(173, 207, 180, 0.25);
+  border-radius: 0.7rem;
+  padding: 0.8rem;
+  background: rgba(173, 207, 180, 0.05);
+  color: #a9ada5;
+  font-size: 0.65rem;
+  line-height: 1.45;
+}
+
+.mock-copilot-answer-card > div { display: flex; justify-content: space-between; gap: 0.75rem; font-size: 0.59rem; }
+.mock-copilot-answer-card strong { color: #adcfb4; }
+.mock-copilot-answer-card p { margin: 0.6rem 0; }
+.mock-copilot-answer-card small { display: block; border-top: 1px solid #2a211d; padding-top: 0.55rem; font-size: 0.58rem; }
+.mock-copilot-answer-card small b { color: #eae1dd; font-weight: 600; }
 
 .mock-home-header,
 .mock-card-heading {
@@ -445,6 +605,52 @@ h1 span {
   white-space: nowrap;
 }
 
+.mock-copilot-icon {
+  width: 1rem;
+  height: 1rem;
+  color: #adcfb4;
+  stroke-width: 1.8;
+}
+
+.mock-copilot-prompt {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.9rem;
+  border: 1px solid rgba(173, 207, 180, 0.24);
+  border-radius: 0.58rem;
+  padding: 0.42rem 0.42rem 0.42rem 0.72rem;
+  background: rgba(5, 3, 2, 0.46);
+  color: #a9ada5;
+  font-size: 0.65rem;
+}
+
+.mock-copilot-prompt span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mock-copilot-prompt button {
+  border: 1px solid #466550;
+  border-radius: 0.4rem;
+  padding: 0.36rem 0.48rem;
+  background: #203827;
+  color: #f1eee8;
+  font: inherit;
+  font-size: 0.6rem;
+  font-weight: 700;
+}
+
+.mock-copilot-note {
+  margin: 0.7rem 0 0;
+  color: #a9ada5;
+  font-size: 0.61rem;
+  line-height: 1.45;
+}
+
 .mock-task {
   margin-top: 0.65rem;
   padding: 0.85rem 0.95rem;
@@ -498,6 +704,172 @@ h1 span {
 .mock-source-statuses span { display: flex; align-items: center; gap: 0.45rem; }
 .mock-source-statuses i { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: #adcfb4; box-shadow: 0 0 0 0.18rem rgba(173, 207, 180, 0.12); }
 .mock-source-statuses b { margin-left: auto; color: #a9ada5; font-size: 0.66rem; font-weight: 500; }
+
+.mock-nav-home,
+.mock-nav-copilot {
+  animation-duration: 24s;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.mock-nav-home { animation-name: mock-nav-home; }
+.mock-nav-copilot { animation-name: mock-nav-copilot; }
+
+.mock-session-sync { position: relative; height: 2.25rem; }
+.mock-session-sync span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 0.35rem; white-space: nowrap; }
+.mock-syncing { animation: mock-syncing 24s linear infinite; }
+.mock-sync-ready { animation: mock-sync-ready 24s linear infinite; }
+.mock-syncing i { width: 0.62rem; height: 0.62rem; border: 1px solid rgba(173, 207, 180, 0.35); border-top-color: #adcfb4; border-radius: 50%; animation: mock-spin 700ms linear infinite; }
+
+.mock-demo-task {
+  opacity: 0;
+  transform: translateY(0.45rem);
+  animation-duration: 24s;
+  animation-timing-function: ease-out;
+  animation-iteration-count: infinite;
+}
+
+.mock-demo-task-one { animation-name: mock-task-one; }
+.mock-demo-task-two { animation-name: mock-task-two; }
+
+.mock-status,
+.mock-outcome {
+  position: relative;
+  display: inline-grid;
+  min-width: 4.25rem;
+  place-items: center start;
+}
+
+.mock-status b,
+.mock-outcome b { grid-area: 1 / 1; font-weight: inherit; }
+.mock-status b:last-child,
+.mock-outcome b:last-child { opacity: 0; }
+
+.mock-demo-task-one .mock-status b:first-child,
+.mock-demo-task-one .mock-outcome b:first-child { animation: mock-first-live-label 24s linear infinite; }
+.mock-demo-task-one .mock-status b:last-child,
+.mock-demo-task-one .mock-outcome b:last-child { animation: mock-first-complete-label 24s linear infinite; }
+.mock-demo-task-two .mock-status b:first-child,
+.mock-demo-task-two .mock-outcome b:first-child { animation: mock-second-live-label 24s linear infinite; }
+.mock-demo-task-two .mock-status b:last-child,
+.mock-demo-task-two .mock-outcome b:last-child { animation: mock-second-complete-label 24s linear infinite; }
+
+.mock-demo-cursor {
+  position: absolute;
+  z-index: 8;
+  top: 86%;
+  left: 10%;
+  color: #f6f2e8;
+  font-size: 1.55rem;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  text-shadow: -1px -1px 0 #090504, 1px -1px 0 #090504, -1px 1px 0 #090504, 1px 1px 0 #090504;
+  animation: mock-cursor-move 24s linear infinite;
+}
+
+.mock-demo-cursor span { display: block; transform: rotate(-43deg); }
+.mock-demo-cursor i { position: absolute; top: 0.35rem; left: 0.25rem; width: 0.85rem; height: 0.85rem; border: 1px solid rgba(181, 241, 200, 0.82); border-radius: 50%; opacity: 0; animation: mock-cursor-ping 24s linear infinite; }
+
+@keyframes mock-home-screen {
+  0%, 52% { opacity: 1; transform: translateY(0); }
+  55%, 98% { opacity: 0; transform: translateY(-0.6rem); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes mock-copilot-screen {
+  0%, 52% { opacity: 0; transform: translateY(0.6rem); }
+  56%, 97% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(0.6rem); }
+}
+
+@keyframes mock-nav-home {
+  0%, 52% { border-color: rgba(173, 207, 180, 0.28); background: rgba(173, 207, 180, 0.12); color: #adcfb4; }
+  56%, 100% { border-color: transparent; background: transparent; color: #a9ada5; }
+}
+
+@keyframes mock-nav-copilot {
+  0%, 52% { border-color: transparent; background: transparent; color: #a9ada5; }
+  56%, 97% { border-color: rgba(173, 207, 180, 0.28); background: rgba(173, 207, 180, 0.12); color: #adcfb4; }
+  100% { border-color: transparent; background: transparent; color: #a9ada5; }
+}
+
+@keyframes mock-syncing {
+  0%, 11% { opacity: 1; }
+  13%, 100% { opacity: 0; }
+}
+
+@keyframes mock-sync-ready {
+  0%, 11% { opacity: 0; }
+  13%, 100% { opacity: 1; }
+}
+
+@keyframes mock-task-one {
+  0%, 12% { opacity: 0; transform: translateY(0.45rem); }
+  16%, 52% { opacity: 1; transform: translateY(0); }
+  55%, 100% { opacity: 0; transform: translateY(0.45rem); }
+}
+
+@keyframes mock-task-two {
+  0%, 18% { opacity: 0; transform: translateY(0.45rem); }
+  22%, 52% { opacity: 1; transform: translateY(0); }
+  55%, 100% { opacity: 0; transform: translateY(0.45rem); }
+}
+
+@keyframes mock-first-live-label {
+  0%, 29% { opacity: 1; }
+  31%, 100% { opacity: 0; }
+}
+
+@keyframes mock-first-complete-label {
+  0%, 29% { opacity: 0; }
+  31%, 52% { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+
+@keyframes mock-second-live-label {
+  0%, 39% { opacity: 1; }
+  41%, 100% { opacity: 0; }
+}
+
+@keyframes mock-second-complete-label {
+  0%, 39% { opacity: 0; }
+  41%, 52% { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+
+@keyframes mock-cursor-move {
+  0%, 2% { top: 86%; left: 10%; opacity: 0; }
+  4%, 10% { top: 86%; left: 10%; opacity: 1; }
+  14% { top: 38%; left: 43%; opacity: 1; }
+  27%, 32% { top: 38%; left: 43%; opacity: 1; }
+  36% { top: 49%; left: 43%; opacity: 1; }
+  39%, 43% { top: 49%; left: 43%; opacity: 1; }
+  48% { top: 24%; left: 10%; opacity: 1; }
+  52% { top: 24%; left: 10%; opacity: 0; }
+  100% { top: 86%; left: 10%; opacity: 0; }
+}
+
+@keyframes mock-cursor-ping {
+  0%, 7%, 20%, 33%, 42%, 100% { opacity: 0; transform: scale(0.3); }
+  8%, 21%, 34%, 43% { opacity: 0.9; transform: scale(1.7); }
+  10%, 23%, 36%, 45% { opacity: 0; transform: scale(2.2); }
+}
+
+@keyframes mock-type-question {
+  0%, 61% { max-width: 0; }
+  76%, 97% { max-width: 20rem; }
+  100% { max-width: 0; }
+}
+
+@keyframes mock-copilot-answer {
+  0%, 78% { opacity: 0; transform: translateY(0.55rem); }
+  83%, 97% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(0.55rem); }
+}
+
+@keyframes mock-caret { 50% { opacity: 0; } }
+@keyframes mock-spin { to { transform: rotate(360deg); } }
 
 .site-footer {
   position: relative;
@@ -739,7 +1111,23 @@ h1 span {
 
   .mock-sidebar { display: none; }
 
+  .mock-demo-main { min-height: 29rem; }
+
   .mock-main { padding: 1rem; }
+
+  .mock-copilot-screen { padding: 1rem; }
+
+  .mock-copilot-top { top: 0.8rem; right: 0.85rem; }
+
+  .mock-copilot-welcome { width: min(25rem, 94%); transform: translateY(-0.6rem); }
+
+  .mock-copilot-welcome-copy h2 { font-size: 1.08rem; }
+
+  .mock-copilot-welcome-copy span,
+  .mock-copilot-answer-card,
+  .mock-copilot-user-message { font-size: 0.58rem; }
+
+  .mock-demo-cursor { display: none; }
 
   .mock-home-header { align-items: center; }
 
@@ -782,6 +1170,10 @@ h1 span {
   .mock-card-heading h2 { font-size: 0.7rem; }
 
   .mock-card-heading button { font-size: 0.58rem; }
+
+  .mock-copilot-prompt { margin-top: 0.7rem; font-size: 0.58rem; }
+
+  .mock-copilot-note { font-size: 0.56rem; }
 
   .mock-pills span { font-size: 0.54rem; }
 
@@ -850,6 +1242,36 @@ h1 span {
   .product-stage {
     animation: none;
   }
+
+  .mock-home-screen,
+  .mock-copilot-screen,
+  .mock-nav-home,
+  .mock-nav-copilot,
+  .mock-syncing,
+  .mock-sync-ready,
+  .mock-demo-task,
+  .mock-demo-task-one .mock-status b,
+  .mock-demo-task-one .mock-outcome b,
+  .mock-demo-task-two .mock-status b,
+  .mock-demo-task-two .mock-outcome b,
+  .mock-typed-question,
+  .mock-copilot-answer,
+  .mock-copilot-composer > div > i,
+  .mock-syncing i {
+    animation: none;
+  }
+
+  .mock-home-screen { display: none; }
+
+  .mock-copilot-screen { opacity: 1; transform: none; }
+
+  .mock-nav-home { border-color: transparent; background: transparent; color: #a9ada5; }
+
+  .mock-nav-copilot { border-color: rgba(173, 207, 180, 0.28); background: rgba(173, 207, 180, 0.12); color: #adcfb4; }
+
+  .mock-typed-question { max-width: 20rem; }
+
+  .mock-copilot-answer { opacity: 1; transform: none; }
 
   .firefly {
     opacity: 0.55;

@@ -44,6 +44,9 @@ test("ships the branded landing page without Cloudflare deployment code", async 
   assert.match(packageJson, /"lucide-react"/);
   assert.match(page, /Download Pulse for Windows/);
   assert.match(page, /Pulse activity dashboard preview/);
+  assert.match(page, /Task Copilot/);
+  assert.match(page, /Syncing sessions/);
+  assert.match(page, /What should I focus on next/);
   assert.match(page, /application\/ld\+json/);
   assert.doesNotMatch(page, /pulse-dashboard\.png/);
   assert.match(layout, /siteTitle/);
