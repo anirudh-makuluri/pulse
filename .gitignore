@@ -11,7 +11,8 @@ infra/aws/.build/
 infra/aws/lambda/node_modules/
 *.pdb
 .idea/
-.vscode/
+.vscode/*
+!.vscode/mcp.json.example
 *.swp
 *.swo
 .tauri/

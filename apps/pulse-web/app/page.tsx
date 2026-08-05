@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { Database, House, Inbox, Minus, Settings, Square, X } from "lucide-react";
+import { ArrowUp, Database, History, House, Inbox, Minus, Settings, Sparkles, Square, X } from "lucide-react";
 import Link from "next/link";
 import { headers } from "next/headers";
 import {
@@ -201,18 +201,23 @@ export default async function Home() {
 
             <div className="mock-content">
               <aside className="mock-sidebar" aria-label="Pulse sections">
-                <div className="mock-nav-item is-active"><House aria-hidden="true" />Home</div>
+                <div className="mock-nav-item mock-nav-home"><House aria-hidden="true" />Home</div>
                 <div className="mock-nav-item"><Inbox aria-hidden="true" />Inbox</div>
+                <div className="mock-nav-item mock-nav-copilot"><Sparkles aria-hidden="true" />Task Copilot</div>
                 <div className="mock-nav-item"><Database aria-hidden="true" />Sources</div>
                 <p className="mock-nav-label">System</p>
                 <div className="mock-nav-item"><Settings aria-hidden="true" />Settings</div>
                 <div className="mock-sidebar-actions">
                   <button type="button">Capture task</button>
-                  <button type="button">Sync latest sessions</button>
+                  <button className="mock-session-sync" type="button">
+                    <span className="mock-syncing"><i aria-hidden="true" />Syncing sessions...</span>
+                    <span className="mock-sync-ready">Sync latest sessions</span>
+                  </button>
                 </div>
               </aside>
 
-              <div className="mock-main">
+              <div className="mock-demo-main">
+              <div className="mock-main mock-home-screen">
                 <div className="mock-home-header">
                   <div>
                     <p className="mock-kicker">Home</p>
@@ -229,14 +234,14 @@ export default async function Home() {
                     </div>
                     <button type="button">View today</button>
                   </div>
-                  <div className="mock-task is-featured">
+                  <div className="mock-task mock-demo-task mock-demo-task-one is-featured">
                     <strong>Polish the onboarding experience</strong>
-                    <div className="mock-pills"><span>Today</span><span className="source-codex">codex</span><span className="outcome-progress">In progress</span><span>pulse</span></div>
+                    <div className="mock-pills"><span className="mock-status"><b>Today</b><b>Done</b></span><span className="source-codex">codex</span><span className="outcome-progress mock-outcome"><b>In progress</b><b>Completed</b></span><span>pulse</span></div>
                     <small>Review the welcome screen and confirm every empty state.</small>
                   </div>
-                  <div className="mock-task mock-task-secondary">
+                  <div className="mock-task mock-demo-task mock-demo-task-two mock-task-secondary">
                     <strong>Prepare the Windows beta release</strong>
-                    <div className="mock-pills"><span>Today</span><span className="source-claude">claude</span><span className="outcome-progress">In progress</span><span>launch</span></div>
+                    <div className="mock-pills"><span className="mock-status"><b>Today</b><b>Done</b></span><span className="source-claude">claude</span><span className="outcome-progress mock-outcome"><b>In progress</b><b>Completed</b></span><span>launch</span></div>
                     <small>Run the installer once on a clean Windows machine.</small>
                   </div>
                 </section>
@@ -244,10 +249,11 @@ export default async function Home() {
                 <div className="mock-lower-grid">
                   <section className="mock-small-card">
                     <div className="mock-card-heading">
-                      <div><h2>Needs triage</h2><p>1 task is waiting in Inbox.</p></div>
-                      <button type="button">Review</button>
+                      <div><h2>Task Copilot</h2><p>Ask about priorities and blockers, or add and update tasks.</p></div>
+                      <Sparkles className="mock-copilot-icon" aria-hidden="true" />
                     </div>
-                    <div className="mock-task"><strong>Review the reminder notification copy</strong><div className="mock-pills"><span>Inbox</span><span className="source-claude">claude</span><span>desktop</span></div></div>
+                    <div className="mock-copilot-prompt"><span>What should I work on today?</span><button type="button">Ask</button></div>
+                    <p className="mock-copilot-note">Uses your local tasks to help you move work forward.</p>
                   </section>
                   <section className="mock-small-card mock-continue-card">
                     <div className="mock-card-heading">
@@ -267,7 +273,31 @@ export default async function Home() {
                   <div className="mock-source-statuses"><span><i />Claude <b>Watching</b></span><span><i />Codex <b>Watching</b></span></div>
                 </section>
               </div>
+              <section className="mock-copilot-screen" aria-label="Task Copilot preview">
+                <div className="mock-copilot-top"><button type="button"><History aria-hidden="true" />History</button></div>
+                <div className="mock-copilot-welcome">
+                  <div className="mock-copilot-welcome-copy">
+                    <p>Task Copilot</p>
+                    <h2>What can I help you move forward?</h2>
+                    <span>Ask about your tasks, priorities, or blockers.</span>
+                  </div>
+                  <div className="mock-copilot-composer">
+                    <div><span className="mock-typed-question">What should I focus on next?</span><i aria-hidden="true" /></div>
+                    <button type="button"><ArrowUp aria-hidden="true" /></button>
+                  </div>
+                  <div className="mock-copilot-answer">
+                    <div className="mock-copilot-user-message">What should I focus on next?</div>
+                    <div className="mock-copilot-answer-card">
+                      <div><strong>Task Copilot</strong><span>Powered locally</span></div>
+                      <p>Finish the Windows beta release next. It&apos;s already in progress and has a clear next action: run the installer on a clean Windows machine.</p>
+                      <small>Supporting task&nbsp; <b>Prepare the Windows beta release</b></small>
+                    </div>
+                  </div>
+                </div>
+              </section>
+              </div>
             </div>
+            <div className="mock-demo-cursor" aria-hidden="true"><span>➤</span><i /></div>
           </div>
         </div>
       </section>
