@@ -705,9 +705,9 @@ impl Store {
         &self,
         state: NewSessionSyncState,
     ) -> Result<SessionSyncState> {
-        if !matches!(state.source.as_str(), "claude" | "codex") {
+        if !matches!(state.source.as_str(), "brave" | "claude" | "codex") {
             return Err(PulseError::Validation(
-                "session sync source must be claude or codex".into(),
+                "session sync source must be brave, claude, or codex".into(),
             ));
         }
         if !matches!(

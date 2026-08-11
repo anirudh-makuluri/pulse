@@ -1,7 +1,8 @@
 //! Service PID file helpers.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +63,56 @@ fn paths_equal(a: &str, b: &str) -> bool {
     na == nb
 }
 
+/// Returns true only when the live process still matches the executable that
+/// wrote the PID file. This guards against PID reuse before terminating a
+/// service that stopped serving its IPC pipe.
+pub fn service_process_matches(info: &ServicePidFile) -> bool {
+    if !process_is_live(info.pid) {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        process_executable_path(info.pid)
+            .map(|path| paths_equal(&path.to_string_lossy(), &info.exe_path))
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
+/// Force-stop a verified unhealthy service. Callers must first confirm that
+/// its IPC endpoint is unavailable; healthy services should shut down through
+/// their normal RPC instead.
+pub fn terminate_service_process(info: &ServicePidFile) -> Result<()> {
+    if !service_process_matches(info) {
+        return Err(PulseError::Ipc(format!(
+            "refusing to terminate pid {} because it no longer matches the Pulse service PID file",
+            info.pid
+        )));
+    }
+
+    #[cfg(windows)]
+    let status = Command::new("taskkill")
+        .args(["/PID", &info.pid.to_string(), "/F"])
+        .status()
+        .map_err(|error| PulseError::Ipc(format!("terminate Pulse service: {error}")))?;
+    #[cfg(not(windows))]
+    let status = Command::new("kill")
+        .args(["-TERM", &info.pid.to_string()])
+        .status()
+        .map_err(|error| PulseError::Ipc(format!("terminate Pulse service: {error}")))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(PulseError::Ipc(format!(
+            "terminate Pulse service exited with {status}"
+        )))
+    }
+}
+
 /// Returns true if a process with this PID appears to be running.
 pub fn process_is_live(pid: u32) -> bool {
     #[cfg(windows)]
@@ -90,6 +141,32 @@ fn windows_process_live(pid: u32) -> bool {
         let live = WaitForSingleObject(handle, 0) == WAIT_TIMEOUT;
         CloseHandle(handle);
         live
+    }
+}
+
+#[cfg(windows)]
+fn process_executable_path(pid: u32) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() || handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut buffer = vec![0u16; 32_768];
+        let mut len = buffer.len() as u32;
+        let ok = QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut len);
+        CloseHandle(handle);
+        if ok == 0 {
+            return None;
+        }
+        buffer.truncate(len as usize);
+        Some(PathBuf::from(OsString::from_wide(&buffer)))
     }
 }
 
@@ -133,5 +210,13 @@ mod tests {
         write_pid_file(&path, &info).unwrap();
         let got = read_pid_file(&path).unwrap().unwrap();
         assert_eq!(got, info);
+    }
+
+    #[test]
+    fn path_comparison_is_case_and_separator_insensitive() {
+        assert!(paths_equal(
+            r"C:\Pulse\pulse-service.exe",
+            "c:/pulse/PULSE-SERVICE.EXE"
+        ));
     }
 }

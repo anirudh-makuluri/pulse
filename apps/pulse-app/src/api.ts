@@ -145,6 +145,7 @@ export async function serviceInfo(): Promise<string> {
 }
 
 export interface SettingsSnapshot {
+  brave_enabled: boolean;
   claude_enabled: boolean;
   codex_enabled: boolean;
   privacy_ack: boolean;

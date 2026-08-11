@@ -8,6 +8,8 @@ pub enum SourceError {
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("sqlite: {0}")]
+    Sqlite(#[from] rusqlite::Error),
     #[error("{0}")]
     Msg(String),
 }
@@ -16,6 +18,7 @@ pub type Result<T> = std::result::Result<T, SourceError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceId {
+    Brave,
     Claude,
     Codex,
 }
@@ -23,6 +26,7 @@ pub enum SourceId {
 impl SourceId {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Brave => "brave",
             Self::Claude => "claude",
             Self::Codex => "codex",
         }
@@ -62,4 +66,10 @@ pub trait SourceAdapter: Send + Sync {
         artifact: &DiscoveredArtifact,
         since_offset: Option<u64>,
     ) -> Result<ExtractedBatch>;
+
+    /// Transcript sources persist a byte offset. Database-backed sources use
+    /// their own monotonic cursor instead.
+    fn watermark_offset_is_byte_position(&self) -> bool {
+        true
+    }
 }

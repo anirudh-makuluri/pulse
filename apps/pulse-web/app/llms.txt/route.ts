@@ -13,7 +13,7 @@ export function GET() {
 
 > ${siteDescription}
 
-Pulse is a Windows desktop app that turns work activity from tools like Codex and Claude into a focused activity layer. It helps people see what is in progress, what needs attention, and what to do next while keeping session tracking private and local by default.
+Pulse is a Windows desktop app that turns work activity from tools like Codex and Claude, plus opt-in local Brave browser history, into a focused activity layer. It helps people see what is in progress, what needs attention, and what to do next while keeping source tracking private and local by default.
 
 ## Primary Pages
 

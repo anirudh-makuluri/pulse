@@ -79,11 +79,12 @@ export function HomePage() {
           <div className="home-card-heading">
             <div>
               <h2>Source health</h2>
-              <p>Session tracking is private and local by default.</p>
+              <p>Source tracking is private and local by default.</p>
             </div>
             <button type="button" className="text-button" onClick={() => setView("Sources")}>Manage</button>
           </div>
           <div className="source-statuses">
+            <div><span className={`source-indicator ${settings?.brave_enabled ? "enabled" : ""}`} />Brave Browser <span>{settings?.brave_enabled ? "Watching" : "Off"}</span></div>
             <div><span className={`source-indicator ${settings?.claude_enabled ? "enabled" : ""}`} />Claude <span>{settings?.claude_enabled ? "Watching" : "Off"}</span></div>
             <div><span className={`source-indicator ${settings?.codex_enabled ? "enabled" : ""}`} />Codex <span>{settings?.codex_enabled ? "Watching" : "Off"}</span></div>
           </div>

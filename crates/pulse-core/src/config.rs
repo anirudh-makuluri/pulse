@@ -218,6 +218,8 @@ impl Default for InferenceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct SourcesConfig {
     #[serde(default)]
+    pub brave: SourceToggle,
+    #[serde(default)]
     pub claude: SourceToggle,
     #[serde(default)]
     pub codex: SourceToggle,
@@ -502,6 +504,7 @@ mod tests {
         assert_eq!(cfg.llm.provider, "auto");
         assert!(!cfg.privacy.acknowledge_remote_llm);
         assert!(!cfg.sources.claude.enabled);
+        assert!(!cfg.sources.brave.enabled);
         assert!(!cfg.sync.enabled);
         assert_eq!(cfg.embeddings.provider, "huggingface_onnx");
         assert_eq!(cfg.embeddings.dimensions, 384);

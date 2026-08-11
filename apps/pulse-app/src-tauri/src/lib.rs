@@ -1,8 +1,9 @@
 use pulse_core::{
-    export_history, load_config, open_db, parse_omnibox, try_connect, write_config, ActivityEvent,
-    Artifact, Checkpoint, Evidence, ExportFormat, Memory, NewActivityEvent, NewReminder, NewTask,
-    OmniboxIntent, ParsedOmniboxIntent, PulsePaths, Reminder, ReminderStatus, Session, Store,
-    SyncOutcome, Task, TaskStatus, TaskUpdate,
+    export_history, live_service_pid, load_config, open_db, parse_omnibox,
+    terminate_service_process, try_connect, write_config, ActivityEvent, Artifact, Checkpoint,
+    Evidence, ExportFormat, Memory, NewActivityEvent, NewReminder, NewTask, OmniboxIntent,
+    ParsedOmniboxIntent, PulsePaths, Reminder, ReminderStatus, Session, Store, SyncOutcome, Task,
+    TaskStatus, TaskUpdate,
 };
 use pulse_llm::llm_status;
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use std::{
     collections::HashMap,
     sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{tray::{MouseButton, MouseButtonState, TrayIconEvent}, Emitter, Manager, PhysicalPosition};
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
@@ -59,6 +60,7 @@ struct ActivityTimeline {
 
 #[derive(Debug, Serialize)]
 struct SettingsSnapshot {
+    brave_enabled: bool,
     claude_enabled: bool,
     codex_enabled: bool,
     privacy_ack: bool,
@@ -93,8 +95,18 @@ struct OmniboxResult {
 }
 
 fn open_store() -> Result<Store, String> {
-    let paths = PulsePaths::default().map_err(|e| e.to_string())?;
-    paths.ensure_layout().map_err(|e| e.to_string())?;
+    let paths = paths()?;
+    let cfg = load_config(&paths.config_path()).map_err(|e| e.to_string())?;
+    if try_connect(&cfg.service.pipe_name).is_err() {
+        if let Some(info) =
+            live_service_pid(&paths.service_pid_path()).map_err(|e| e.to_string())?
+        {
+            return Err(format!(
+                "Pulse service is unhealthy (pid {} is live but IPC is unavailable). Restart Pulse; direct database access is disabled to prevent a database lock.",
+                info.pid
+            ));
+        }
+    }
     let conn = open_db(&paths.db_path()).map_err(|e| e.to_string())?;
     Ok(Store::new(conn))
 }
@@ -112,6 +124,7 @@ fn start_bundled_service(app: &tauri::App) -> Result<(), String> {
     if try_connect(&cfg.service.pipe_name).is_ok() {
         return Ok(());
     }
+    recover_unhealthy_service(&paths, &cfg.service.pipe_name)?;
     let command = app
         .shell()
         .sidecar("pulse-service")
@@ -132,6 +145,38 @@ fn start_bundled_service(app: &tauri::App) -> Result<(), String> {
         .lock()
         .map_err(|_| "service state lock failed")? = Some(child);
     Ok(())
+}
+
+/// A live PID with no IPC listener is unsafe: starting another service would
+/// create two SQLite writers, while direct fallback would contend with the
+/// original process. Terminate only the process whose executable still matches
+/// the PID file, then wait for the stale record to clear before replacement.
+fn recover_unhealthy_service(paths: &PulsePaths, pipe_name: &str) -> Result<(), String> {
+    let Some(info) = live_service_pid(&paths.service_pid_path()).map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    if info.pipe_name != pipe_name {
+        return Err(format!(
+            "Pulse service PID file names pipe '{}' instead of '{}'; refusing to start a second service.",
+            info.pipe_name, pipe_name
+        ));
+    }
+    terminate_service_process(&info).map_err(|e| e.to_string())?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if live_service_pid(&paths.service_pid_path())
+            .map_err(|e| e.to_string())?
+            .is_none()
+        {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!(
+        "Pulse service pid {} did not exit after recovery; refusing to start a second service.",
+        info.pid
+    ))
 }
 
 fn stop_bundled_service(app: &tauri::AppHandle) {
@@ -975,6 +1020,7 @@ fn get_settings() -> Result<SettingsSnapshot, String> {
     let st = llm_status(&cfg.llm, &cfg.privacy);
     let service_line = service_info().unwrap_or_else(|_| "backend unknown".into());
     Ok(SettingsSnapshot {
+        brave_enabled: cfg.sources.brave.enabled,
         claude_enabled: cfg.sources.claude.enabled,
         codex_enabled: cfg.sources.codex.enabled,
         privacy_ack: cfg.privacy.acknowledge_remote_llm,
@@ -1026,6 +1072,7 @@ fn set_source_enabled(id: String, enabled: bool) -> Result<(), String> {
     }
     let mut cfg = cfg;
     match id.as_str() {
+        "brave" => cfg.sources.brave.enabled = enabled,
         "claude" => cfg.sources.claude.enabled = enabled,
         "codex" => cfg.sources.codex.enabled = enabled,
         other => return Err(format!("unknown source: {other}")),

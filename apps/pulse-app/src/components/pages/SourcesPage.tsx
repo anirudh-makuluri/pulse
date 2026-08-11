@@ -11,7 +11,7 @@ export function SourcesPage({ onRefresh }: SourcesPageProps) {
   const error = useAppStore((state) => state.error);
   const setError = useAppStore((state) => state.setError);
 
-  async function updateSource(source: "claude" | "codex", enabled: boolean) {
+  async function updateSource(source: "brave" | "claude" | "codex", enabled: boolean) {
     try {
       await setSourceEnabled(source, enabled);
       await onRefresh();
@@ -25,7 +25,7 @@ export function SourcesPage({ onRefresh }: SourcesPageProps) {
       <div className="section-header">
         <div>
           <div className="eyebrow">Sources</div>
-          <p>Choose which local session data Pulse watches.</p>
+          <p>Choose which local work signals Pulse watches.</p>
         </div>
         <button type="button" className="text-button" onClick={() => void onRefresh()}>
           Refresh
@@ -36,6 +36,20 @@ export function SourcesPage({ onRefresh }: SourcesPageProps) {
         <div className="empty-list">Loading sources…</div>
       ) : (
         <div className="section-content sources-page">
+          <section className="home-card source-card">
+            <div>
+              <h2>Brave Browser</h2>
+              <p>Read recent local Brave history (page titles and URLs) to infer task candidates. It never changes your browser data.</p>
+            </div>
+            <div className="source-toggle">
+              <span>{settings.brave_enabled ? "Watching" : "Off"}</span>
+              <Switch
+                checked={settings.brave_enabled}
+                onCheckedChange={(enabled) => void updateSource("brave", enabled)}
+                aria-label="Watch recent Brave browsing history"
+              />
+            </div>
+          </section>
           <section className="home-card source-card">
             <div>
               <h2>Claude</h2>

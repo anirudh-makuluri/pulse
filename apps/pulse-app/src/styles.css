@@ -317,6 +317,7 @@ button { -webkit-font-smoothing: antialiased; }
 .task-meta { display: flex; flex-wrap: wrap; gap: 6px; color: var(--muted); font-size: 12px; }
 .pill { border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; background: rgba(255, 255, 255, 0.025); }
 .pill.source-claude { color: #d9b5ff; }
+.pill.source-brave { color: #f6a85f; border-color: rgba(246, 168, 95, 0.38); }
 .pill.source-codex, .pill.outcome-in_progress { color: var(--accent); border-color: rgba(173, 207, 180, 0.38); }
 .pill.source-manual { color: var(--muted); }
 .pill.outcome-completed { color: var(--secondary); border-color: rgba(185, 204, 176, 0.4); }

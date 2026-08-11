@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::{PulseError, Result};
 
 /// Highest migration version this binary knows how to apply.
-pub const LATEST_SCHEMA_VERSION: i64 = 6;
+pub const LATEST_SCHEMA_VERSION: i64 = 7;
 
 const MIGRATION_001: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_002: &str = include_str!("../migrations/002_activity_timeline.sql");
@@ -13,6 +13,7 @@ const MIGRATION_003: &str = include_str!("../migrations/003_sync_outbox.sql");
 const MIGRATION_004: &str = include_str!("../migrations/004_sync_outcome.sql");
 const MIGRATION_005: &str = include_str!("../migrations/005_session_sync_state.sql");
 const MIGRATION_006: &str = include_str!("../migrations/006_copilot_conversations.sql");
+const MIGRATION_007: &str = include_str!("../migrations/007_brave_source.sql");
 
 /// Open (or create) the SQLite database, enable pragmas, apply migrations.
 pub fn open(path: &Path) -> Result<Connection> {
@@ -103,6 +104,23 @@ fn migrate(conn: &Connection) -> Result<()> {
             [6i64],
         )?;
         tx.commit()?;
+    }
+    if current < 7 {
+        // SQLite cannot alter CHECK constraints. This migration rebuilds the
+        // two constrained tables while foreign keys are temporarily disabled.
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        let migration = (|| -> Result<()> {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(MIGRATION_007)?;
+            tx.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
+                [7i64],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })();
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        migration?;
     }
     Ok(())
 }
@@ -216,5 +234,64 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 8);
+    }
+
+    #[test]
+    fn migrates_existing_tasks_to_the_brave_source_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        configure(&conn).unwrap();
+        for migration in [
+            MIGRATION_001,
+            MIGRATION_002,
+            MIGRATION_003,
+            MIGRATION_004,
+            MIGRATION_005,
+            MIGRATION_006,
+        ] {
+            conn.execute_batch(migration).unwrap();
+        }
+        for version in 1..=6 {
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, datetime('now'))",
+                [version],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO tasks (
+              id, title, status, source, confidence, project, notes,
+              suggested_next_action, dedup_key, source_session_id,
+              created_at, updated_at, completed_at, sync_outcome, sync_outcome_confidence
+            ) VALUES (
+              'task-1', 'Keep the existing task', 'Inbox', 'codex', NULL, NULL, NULL,
+              NULL, NULL, 'session-1',
+              '2026-08-05T00:00:00Z', '2026-08-05T01:00:00Z', NULL, 'in_progress', 0.8
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO evidence (id, task_id, kind, source_ref, snippet, metadata_json, observed_at)
+             VALUES ('evidence-1', 'task-1', 'session_snippet', 'codex:session-1', NULL, NULL, '2026-08-05T01:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let row: (String, String, String) = conn
+            .query_row(
+                "SELECT source, updated_at, sync_outcome FROM tasks WHERE id = 'task-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "codex");
+        assert_eq!(row.1, "2026-08-05T01:00:00Z");
+        assert_eq!(row.2, "in_progress");
+        let foreign_key_errors: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(foreign_key_errors, 0);
     }
 }

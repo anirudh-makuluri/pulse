@@ -16,7 +16,7 @@ use pulse_llm::{
     redact_for_remote, resolve_llm_client, HeuristicClient, InferRequest, LlmClient, SummaryRequest,
 };
 use pulse_sources::{
-    ClaudeSource, CodexSource, DiscoveredArtifact, ExtractedBatch, SourceAdapter, SourceId,
+    BraveSource, ClaudeSource, CodexSource, DiscoveredArtifact, ExtractedBatch, SourceAdapter, SourceId,
 };
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -116,6 +116,11 @@ pub fn sync_recent_sessions(
 
     let max_bytes = cfg.inference.max_candidate_text_bytes as usize;
     let mut adapters: Vec<Box<dyn SourceAdapter>> = Vec::new();
+    if cfg.sources.brave.enabled {
+        let mut source = BraveSource::from_env(max_bytes);
+        source.extra_roots = cfg.sources.brave.extra_roots.iter().map(std::path::PathBuf::from).collect();
+        adapters.push(Box::new(source));
+    }
     if cfg.sources.claude.enabled {
         let mut source = ClaudeSource::from_env(max_bytes);
         source.extra_roots = cfg
@@ -139,7 +144,7 @@ pub fn sync_recent_sessions(
         adapters.push(Box::new(source));
     }
     if adapters.is_empty() {
-        return Err("Enable Claude or Codex session tracking before syncing.".into());
+        return Err("Enable Brave, Claude, or Codex tracking before syncing.".into());
     }
 
     let mut result = RecentSessionSyncResult {
@@ -159,6 +164,7 @@ pub fn sync_recent_sessions(
         artifacts.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
 
         let task_source = match adapter.id() {
+            SourceId::Brave => TaskSource::Brave,
             SourceId::Claude => TaskSource::Claude,
             SourceId::Codex => TaskSource::Codex,
         };
@@ -562,6 +568,11 @@ pub fn run_once(
     let hour_cap = cfg.inference.heuristic_inbox_inserts_per_hour;
 
     let mut adapters: Vec<Box<dyn SourceAdapter>> = Vec::new();
+    if cfg.sources.brave.enabled {
+        let mut s = BraveSource::from_env(max_bytes);
+        s.extra_roots = cfg.sources.brave.extra_roots.iter().map(std::path::PathBuf::from).collect();
+        adapters.push(Box::new(s));
+    }
     if cfg.sources.claude.enabled {
         let mut s = ClaudeSource::from_env(max_bytes);
         s.extra_roots = cfg
@@ -612,7 +623,8 @@ pub fn run_once(
             }
             if let Some(w) = &wm {
                 if w.size_bytes == art.size_bytes as i64
-                    && w.byte_offset == art.size_bytes as i64
+                    && (!adapter.watermark_offset_is_byte_position()
+                        || w.byte_offset == art.size_bytes as i64)
                     && w.mtime_ms == art.mtime_ms
                 {
                     last_seen.insert(art.source_ref.clone(), Instant::now());
@@ -659,6 +671,7 @@ pub fn run_once(
             };
 
             let source = match adapter.id() {
+                SourceId::Brave => TaskSource::Brave,
                 SourceId::Claude => TaskSource::Claude,
                 SourceId::Codex => TaskSource::Codex,
             };
@@ -903,6 +916,7 @@ fn process_artifact(
     };
     let candidates = client.infer_tasks(&req).map_err(|e| e.to_string())?;
     let source = match adapter.id() {
+        SourceId::Brave => TaskSource::Brave,
         SourceId::Claude => TaskSource::Claude,
         SourceId::Codex => TaskSource::Codex,
     };

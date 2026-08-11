@@ -23,7 +23,8 @@ pub use dedup::{compute_dedup_key, normalize_title};
 pub use error::{PulseError, Result};
 pub use export::{export_history, ExportFormat};
 pub use ipc::{
-    live_service_pid, try_connect, write_pid_file, IpcClient, RpcHandler, ServicePidFile,
+    live_service_pid, service_process_matches, terminate_service_process, try_connect,
+    write_pid_file, IpcClient, RpcHandler, ServicePidFile,
 };
 pub use intent::{parse_omnibox, parse_relative_time, OmniboxIntent, ParsedOmniboxIntent};
 pub use models::*;

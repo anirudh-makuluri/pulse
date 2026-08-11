@@ -10,13 +10,15 @@ use std::time::Duration;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
-use pulse_core::ipc::pid::{remove_pid_file_if_matches, write_pid_file, ServicePidFile};
+use pulse_core::ipc::pid::{
+    live_service_pid, remove_pid_file_if_matches, write_pid_file, ServicePidFile,
+};
 use pulse_core::ipc::pipe::{self, current_pid};
 use pulse_core::ipc::rpc::{RpcCode, RpcErrorObject, RpcHandler};
 use pulse_core::{
-    apply_checkin_answer, export_history, load_config, open_db, parse_answer_input, write_config,
-    Config, ExportFormat, NewCheckpoint, NewSession, NewTask, PulseError, PulsePaths, Store,
-    SyncOutcome, Task, TaskStatus, TaskUpdate,
+    apply_checkin_answer, export_history, load_config, open_db, parse_answer_input, try_connect,
+    write_config, Config, ExportFormat, NewCheckpoint, NewSession, NewTask, PulseError,
+    PulsePaths, Store, SyncOutcome, Task, TaskStatus, TaskUpdate,
 };
 use pulse_llm::{
     llm_status, resolve_llm_client, HuggingFaceEmbeddingClient, TaskCopilotAgentRequest,
@@ -214,6 +216,17 @@ fn run_service(data_dir: Option<PathBuf>, quiet: bool) -> Result<(), Box<dyn std
 
     let config = load_config(&paths.config_path())?;
     let pipe_name = config.service.pipe_name.clone();
+    if try_connect(&pipe_name).is_ok() {
+        return Err(Box::new(PulseError::Ipc(format!(
+            "Pulse service is already reachable on pipe '{pipe_name}'"
+        ))));
+    }
+    if let Some(info) = live_service_pid(&paths.service_pid_path())? {
+        return Err(Box::new(PulseError::Ipc(format!(
+            "Pulse service pid {} is live but IPC is unavailable; refusing to replace it without recovery",
+            info.pid
+        ))));
+    }
     let conn = open_db(&paths.db_path())?;
     let store = Arc::new(Mutex::new(Store::new(conn)));
     let config = Arc::new(Mutex::new(config));
@@ -700,6 +713,7 @@ impl RpcHandler for ServiceState {
                     "privacy_ack": st.privacy_ack,
                     "queue_depth": self.store.lock().ok().and_then(|store| store.pending_sync_count().ok()).unwrap_or(0),
                     "sources": {
+                        "brave": cfg.sources.brave.enabled,
                         "claude": cfg.sources.claude.enabled,
                         "codex": cfg.sources.codex.enabled,
                     },
@@ -731,6 +745,11 @@ impl RpcHandler for ServiceState {
                 Ok(json!({
                     "sources": [
                         {
+                            "id": "brave",
+                            "enabled": cfg.sources.brave.enabled,
+                            "extra_roots": cfg.sources.brave.extra_roots,
+                        },
+                        {
                             "id": "claude",
                             "enabled": cfg.sources.claude.enabled,
                             "extra_roots": cfg.sources.claude.extra_roots,
@@ -753,6 +772,7 @@ impl RpcHandler for ServiceState {
                     })?;
                 let mut cfg = self.config.lock().map_err(|_| internal("config lock"))?;
                 match id.as_str() {
+                    "brave" => cfg.sources.brave.enabled = enabled,
                     "claude" => cfg.sources.claude.enabled = enabled,
                     "codex" => cfg.sources.codex.enabled = enabled,
                     other => {

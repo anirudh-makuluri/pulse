@@ -6,6 +6,7 @@ import type { Task } from "@/types";
 
 export function sourceClass(source: string): string {
   const normalized = source.toLowerCase();
+  if (normalized === "brave") return "source-brave";
   if (normalized === "claude") return "source-claude";
   if (normalized === "codex") return "source-codex";
   return "source-manual";

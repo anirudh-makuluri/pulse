@@ -10,7 +10,7 @@ CREATE TABLE tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('Inbox','Today','Next','Waiting','Done')),
-  source TEXT NOT NULL CHECK (source IN ('manual','claude','codex','unknown')),
+  source TEXT NOT NULL CHECK (source IN ('manual','brave','claude','codex','unknown')),
   confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
   project TEXT,
   notes TEXT,

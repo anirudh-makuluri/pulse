@@ -267,7 +267,7 @@ export default async function Home() {
 
                 <section className="mock-source-card">
                   <div className="mock-card-heading">
-                    <div><h2>Source health</h2><p>Session tracking is private and local by default.</p></div>
+                    <div><h2>Source health</h2><p>Source tracking is private and local by default.</p></div>
                     <button type="button">Manage</button>
                   </div>
                   <div className="mock-source-statuses"><span><i />Claude <b>Watching</b></span><span><i />Codex <b>Watching</b></span></div>

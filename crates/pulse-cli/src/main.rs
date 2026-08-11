@@ -5,7 +5,9 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use pulse_core::ipc::pid::{live_service_pid, process_is_live, read_pid_file};
+use pulse_core::ipc::pid::{
+    live_service_pid, process_is_live, read_pid_file, terminate_service_process,
+};
 use pulse_core::{
     apply_checkin_answer, export_history, load_config, open_db, parse_answer_input, try_connect,
     write_config, ExportFormat, IpcClient, NewCheckpoint, NewSession, NewTask, PulseError,
@@ -205,7 +207,7 @@ enum ServiceCmd {
 enum SourcesCmd {
     /// List sources and enabled flags
     List,
-    /// Enable a source (claude|codex)
+    /// Enable a source (brave|claude|codex)
     Enable { id: String },
     /// Disable a source
     Disable { id: String },
@@ -215,7 +217,7 @@ enum SourcesCmd {
 
 #[derive(Subcommand, Debug)]
 enum PrivacyCmd {
-    /// Acknowledge residual risk of sending redacted excerpts via agent CLIs
+    /// Acknowledge residual risk of sending redacted source excerpts via agent CLIs
     Acknowledge,
 }
 
@@ -853,10 +855,20 @@ fn service_start(paths: &PulsePaths) -> Result<(), CliError> {
                 info.pid
             )));
         }
-        return Err(CliError::service(format!(
-            "pid {} is live but pipe is dead; try `pulse service stop --force`",
-            info.pid
-        )));
+        terminate_service_process(&info)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if live_service_pid(&paths.service_pid_path())?.is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if live_service_pid(&paths.service_pid_path())?.is_some() {
+            return Err(CliError::service(format!(
+                "pid {} is live but pipe is dead and did not exit during recovery",
+                info.pid
+            )));
+        }
     }
 
     let mut cmd = service_command();
@@ -912,7 +924,7 @@ fn service_stop(paths: &PulsePaths, force: bool) -> Result<(), CliError> {
     if let Some(info) = read_pid_file(&paths.service_pid_path()).map_err(PulseError::from)? {
         if process_is_live(info.pid) {
             if force {
-                force_kill(info.pid)?;
+                terminate_service_process(&info)?;
                 let _ = std::fs::remove_file(paths.service_pid_path());
                 println!("service force-stopped (pid {})", info.pid);
                 return Ok(());
@@ -958,7 +970,12 @@ fn sources_list(paths: &PulsePaths) -> Result<(), CliError> {
     }
     let cfg = load_config(&paths.config_path())?;
     println!(
-        "claude: {}\ncodex:  {}",
+        "brave:  {}\nclaude: {}\ncodex:  {}",
+        if cfg.sources.brave.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
         if cfg.sources.claude.enabled {
             "enabled"
         } else {
@@ -975,8 +992,8 @@ fn sources_list(paths: &PulsePaths) -> Result<(), CliError> {
 
 fn sources_set(paths: &PulsePaths, id: &str, enabled: bool) -> Result<(), CliError> {
     let id = id.to_ascii_lowercase();
-    if id != "claude" && id != "codex" {
-        return Err(CliError::user("source id must be 'claude' or 'codex'"));
+    if id != "brave" && id != "claude" && id != "codex" {
+        return Err(CliError::user("source id must be 'brave', 'claude', or 'codex'"));
     }
     if enabled {
         let cfg = load_config(&paths.config_path())?;
@@ -985,7 +1002,7 @@ fn sources_set(paths: &PulsePaths, id: &str, enabled: bool) -> Result<(), CliErr
                 "Note: remote LLM is not acknowledged — inference stays heuristic until `pulse privacy acknowledge`."
             );
             eprintln!(
-                "Agent CLIs may send redacted session excerpts to their providers once acknowledged."
+                "Agent CLIs may send redacted source excerpts, including enabled browser-history data, to their providers once acknowledged."
             );
         }
     }
@@ -1000,6 +1017,7 @@ fn sources_set(paths: &PulsePaths, id: &str, enabled: bool) -> Result<(), CliErr
     }
     let mut cfg = load_config(&paths.config_path())?;
     match id.as_str() {
+        "brave" => cfg.sources.brave.enabled = enabled,
         "claude" => cfg.sources.claude.enabled = enabled,
         "codex" => cfg.sources.codex.enabled = enabled,
         _ => unreachable!(),
@@ -1014,7 +1032,7 @@ fn sources_set(paths: &PulsePaths, id: &str, enabled: bool) -> Result<(), CliErr
 
 fn privacy_ack(paths: &PulsePaths) -> Result<(), CliError> {
     eprintln!(
-        "Pulse may call your installed agent CLI with redacted session excerpts (data can leave this machine via that CLI's provider)."
+        "Pulse may call your installed agent CLI with redacted source excerpts, including enabled browser-history data (data can leave this machine via that CLI's provider)."
     );
     if let Ok(mut c) = try_connect_from_paths(paths) {
         c.call_raw("privacy.acknowledge", serde_json::json!({}))?;
@@ -1317,31 +1335,6 @@ fn service_command() -> Command {
     Command::new("pulse-service")
 }
 
-#[cfg(windows)]
-fn force_kill(pid: u32) -> Result<(), CliError> {
-    let status = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/F"])
-        .status()
-        .map_err(|e| CliError::user(format!("taskkill failed: {e}")))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(CliError::user(format!("taskkill exited {status}")))
-    }
-}
-
-#[cfg(not(windows))]
-fn force_kill(pid: u32) -> Result<(), CliError> {
-    let status = Command::new("kill")
-        .args(["-9", &pid.to_string()])
-        .status()
-        .map_err(|e| CliError::user(format!("kill failed: {e}")))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(CliError::user(format!("kill exited {status}")))
-    }
-}
 
 fn short_id(id: &uuid::Uuid) -> String {
     id.as_hyphenated().to_string()[..8].to_string()

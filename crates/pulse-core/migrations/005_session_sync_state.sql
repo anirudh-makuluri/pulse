@@ -3,7 +3,7 @@
 -- transcripts and permanently associates an imported session with one task.
 CREATE TABLE session_sync_state (
   external_id TEXT PRIMARY KEY,
-  source TEXT NOT NULL CHECK (source IN ('claude', 'codex')),
+  source TEXT NOT NULL CHECK (source IN ('brave', 'claude', 'codex')),
   source_session_id TEXT NOT NULL,
   task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   content_fingerprint TEXT NOT NULL,

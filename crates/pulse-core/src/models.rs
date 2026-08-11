@@ -78,6 +78,7 @@ impl SyncOutcome {
 #[serde(rename_all = "lowercase")]
 pub enum TaskSource {
     Manual,
+    Brave,
     Claude,
     Codex,
     Unknown,
@@ -87,6 +88,7 @@ impl TaskSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Manual => "manual",
+            Self::Brave => "brave",
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Unknown => "unknown",
@@ -96,6 +98,7 @@ impl TaskSource {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "manual" => Some(Self::Manual),
+            "brave" => Some(Self::Brave),
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
             "unknown" => Some(Self::Unknown),
