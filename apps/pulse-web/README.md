@@ -4,7 +4,7 @@ The landing page for Pulse, the activity layer for your work.
 
 ## Development
 
-Requires Node.js 22.13 or newer.
+Requires Node.js 22.13 or newer
 
 ```bash
 npm install
