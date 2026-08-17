@@ -47,6 +47,9 @@ test("ships the branded landing page without Cloudflare deployment code", async 
   assert.match(page, /Task Copilot/);
   assert.match(page, /Syncing sessions/);
   assert.match(page, /What should I focus on next/);
+  assert.match(page, /Stop reconstructing your day/);
+  assert.match(page, /Built with CockroachDB and AWS/);
+  assert.match(page, /Local SQLite core/);
   assert.match(page, /application\/ld\+json/);
   assert.doesNotMatch(page, /pulse-dashboard\.png/);
   assert.match(layout, /siteTitle/);

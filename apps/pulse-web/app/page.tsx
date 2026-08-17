@@ -1,5 +1,27 @@
 import type { CSSProperties } from "react";
-import { ArrowUp, Database, History, House, Inbox, Minus, Settings, Sparkles, Square, X } from "lucide-react";
+import {
+  Activity,
+  ArrowRight,
+  ArrowUp,
+  Brain,
+  Cloud,
+  Database,
+  Eye,
+  HardDrive,
+  History,
+  House,
+  Inbox,
+  Layers3,
+  LockKeyhole,
+  Minus,
+  Search,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Square,
+  Workflow,
+  X,
+} from "lucide-react";
 import Link from "next/link";
 import { headers } from "next/headers";
 import {
@@ -301,6 +323,171 @@ export default async function Home() {
           </div>
         </div>
       </section>
+
+      <div className="content-sections">
+        <section className="product-story section-shell" aria-labelledby="product-story-title">
+          <div className="section-heading">
+            <p className="section-kicker">Work with continuity</p>
+            <h2 id="product-story-title">
+              Stop reconstructing your day.
+              <span>Let Pulse keep the thread.</span>
+            </h2>
+            <p>
+              Pulse brings the useful signals from your work into one calm,
+              structured workspace—so context survives the tab, chat, and tool
+              where it started.
+            </p>
+          </div>
+
+          <div className="feature-grid">
+            <article className="feature-card">
+              <div className="feature-icon"><Eye aria-hidden="true" /></div>
+              <p className="feature-number">01</p>
+              <h3>See work as it happens</h3>
+              <p>
+                Enable the sources you want—Codex, Claude, and Brave—and bring
+                recent activity into a single view with its supporting evidence.
+              </p>
+              <span className="feature-detail"><Activity aria-hidden="true" />Source-aware activity</span>
+            </article>
+
+            <article className="feature-card feature-card-raised">
+              <div className="feature-icon"><Layers3 aria-hidden="true" /></div>
+              <p className="feature-number">02</p>
+              <h3>Turn motion into next actions</h3>
+              <p>
+                Move captured work through Inbox, Today, Next, Waiting, and
+                Done while keeping outcomes, reminders, and provenance attached.
+              </p>
+              <span className="feature-detail"><Workflow aria-hidden="true" />A workflow that stays legible</span>
+            </article>
+
+            <article className="feature-card">
+              <div className="feature-icon"><Brain aria-hidden="true" /></div>
+              <p className="feature-number">03</p>
+              <h3>Ask what matters now</h3>
+              <p>
+                Task Copilot answers from your actual work, cites the tasks
+                behind its response, and can make bounded updates when you ask.
+              </p>
+              <span className="feature-detail"><Search aria-hidden="true" />Grounded in your context</span>
+            </article>
+          </div>
+        </section>
+
+        <section className="continuity-section section-shell" aria-labelledby="continuity-title">
+          <div className="continuity-copy">
+            <p className="section-kicker">A quieter way to resume</p>
+            <h2 id="continuity-title">Pick up where the work left off.</h2>
+            <p>
+              Pulse keeps the trail between an activity and its next action.
+              Open the app after a meeting, a coding session, or a long break
+              and see what changed, what is unfinished, and why it matters.
+            </p>
+            <ul className="continuity-list">
+              <li><ShieldCheck aria-hidden="true" /><span><strong>Evidence stays attached.</strong> Know which source and session a task came from.</span></li>
+              <li><ShieldCheck aria-hidden="true" /><span><strong>Progress stays visible.</strong> Separate workflow status from the outcome you observed.</span></li>
+              <li><ShieldCheck aria-hidden="true" /><span><strong>History stays useful.</strong> Search the timeline instead of replaying every conversation.</span></li>
+            </ul>
+          </div>
+
+          <div className="continuity-visual" aria-label="Activity becoming an actionable task">
+            <div className="signal-card signal-source">
+              <span className="signal-label">Observed activity</span>
+              <div><i className="signal-dot" /><strong>Codex session updated</strong><small>Release validation · 8 minutes ago</small></div>
+            </div>
+            <div className="signal-connector"><span /><ArrowRight aria-hidden="true" /></div>
+            <div className="signal-card signal-task">
+              <span className="signal-label">Next action</span>
+              <div className="signal-task-top"><span>Today</span><span>codex</span></div>
+              <strong>Verify the Windows installer</strong>
+              <p>Run the latest build once on a clean machine.</p>
+              <div className="signal-progress"><i /><span>In progress</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section className="cloud-section section-shell" aria-labelledby="cloud-title">
+          <div className="cloud-heading">
+            <div>
+              <p className="section-kicker">Local first. Durable when you choose.</p>
+              <h2 id="cloud-title">Built with CockroachDB and AWS for memory that lasts.</h2>
+            </div>
+            <p>
+              Pulse works from local SQLite without the cloud. When you enable
+              sync, approved structured memory can travel through an authenticated
+              AWS path into CockroachDB for durable, semantic retrieval.
+            </p>
+          </div>
+
+          <div className="architecture-flow">
+            <article className="architecture-card architecture-local">
+              <div className="architecture-icon"><HardDrive aria-hidden="true" /></div>
+              <span className="architecture-tag">On your Windows PC</span>
+              <h3>Private local workspace</h3>
+              <p>Tasks, sources, reminders, conversations, and evidence live in SQLite by default.</p>
+              <div className="architecture-meta"><LockKeyhole aria-hidden="true" />Useful without cloud sync</div>
+            </article>
+
+            <div className="architecture-arrow" aria-hidden="true"><span>Opt-in sync</span><ArrowRight /></div>
+
+            <article className="architecture-card architecture-aws">
+              <div className="architecture-icon"><Cloud aria-hidden="true" /></div>
+              <span className="architecture-tag">AWS</span>
+              <h3>Authenticated durability path</h3>
+              <p>API Gateway and Lambda validate approved memory, while private versioned S3 archives approved payloads.</p>
+              <div className="architecture-meta"><ShieldCheck aria-hidden="true" />Credentials stay out of the UI</div>
+            </article>
+
+            <div className="architecture-arrow" aria-hidden="true"><span>Structured memory</span><ArrowRight /></div>
+
+            <article className="architecture-card architecture-cockroach">
+              <div className="architecture-icon"><Database aria-hidden="true" /></div>
+              <span className="architecture-tag">CockroachDB</span>
+              <h3>Searchable agentic memory</h3>
+              <p>Distributed vector indexing makes approved activities and decisions retrievable across sessions.</p>
+              <div className="architecture-meta"><Search aria-hidden="true" />Semantic search with VECTOR(384)</div>
+            </article>
+          </div>
+
+          <div className="cloud-proof">
+            <span><Database aria-hidden="true" /><strong>CockroachDB</strong> durable structured memory + vector search</span>
+            <i aria-hidden="true" />
+            <span><Cloud aria-hidden="true" /><strong>AWS</strong> secure sync, validation, and private archives</span>
+          </div>
+        </section>
+
+        <section className="privacy-section section-shell" aria-labelledby="privacy-title">
+          <div className="privacy-mark"><LockKeyhole aria-hidden="true" /></div>
+          <div className="privacy-copy">
+            <p className="section-kicker">Private by default</p>
+            <h2 id="privacy-title">Your work history is not the price of admission.</h2>
+            <p>
+              Sources start off, cloud sync is optional, and raw transcripts or
+              local files are never uploaded automatically. Pulse stays useful
+              as a local Windows app before you connect anything else.
+            </p>
+          </div>
+          <div className="privacy-points">
+            <span><i />Local SQLite core</span>
+            <span><i />Opt-in sources</span>
+            <span><i />Approved cloud memory only</span>
+          </div>
+        </section>
+
+        <section className="final-cta section-shell" aria-labelledby="cta-title">
+          <div className="cta-glow" aria-hidden="true" />
+          <img src="/pulse-logo.png" alt="" width={56} height={56} />
+          <p className="section-kicker">Keep the thread</p>
+          <h2 id="cta-title">Give your work a memory.</h2>
+          <p>Start with a private local workspace. Add cloud continuity only when you want it.</p>
+          <a className="download-button" href={downloadUrl}>
+            <span className="windows-mark" aria-hidden="true"><i /><i /><i /><i /></span>
+            Download Pulse for Windows
+          </a>
+          <a className="text-link" href={repositoryUrl}>Explore the open-source project <ArrowRight aria-hidden="true" /></a>
+        </section>
+      </div>
 
       <footer className="site-footer">
         <div className="footer-inner">
